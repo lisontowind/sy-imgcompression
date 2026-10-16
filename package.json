@@ -1,0 +1,40 @@
+{
+  "name": "sy-imgcompression",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline image compression, per-image settings and image filename simplification for SiYuan",
+  "license": "MIT",
+  "scripts": {
+    "dev": "webpack --mode development --watch",
+    "build": "npm run typecheck && webpack --mode production && node scripts/package.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "node scripts/integration.mjs",
+    "docs:images": "node scripts/generate-guide.mjs",
+    "package:assets": "node scripts/package-marketplace-assets.mjs"
+  },
+  "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/oxipng": "^2.3.0",
+    "@jsquash/png": "^3.1.1",
+    "@jsquash/resize": "^2.1.1",
+    "@jsquash/webp": "^1.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/archiver": "^8.0.0",
+    "@types/node": "^22.20.5",
+    "archiver": "^7.0.1",
+    "copy-webpack-plugin": "^14.0.0",
+    "css-loader": "^7.1.5",
+    "jsdom": "^26.1.0",
+    "mini-css-extract-plugin": "^2.10.2",
+    "siyuan": "^1.2.9",
+    "ts-loader": "^9.6.2",
+    "typescript": "5.9",
+    "vitest": "^4.1.12",
+    "webpack": "^5.111.1",
+    "webpack-cli": "^6.0.1"
+  }
+}

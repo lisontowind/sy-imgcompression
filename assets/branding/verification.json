@@ -1,0 +1,24 @@
+{
+  "icon": {
+    "width": 160,
+    "height": 160,
+    "bytes": 12965,
+    "alpha": [
+      0,
+      255
+    ],
+    "transparent_corners": true
+  },
+  "preview": {
+    "width": 1024,
+    "height": 768,
+    "bytes": 412517
+  },
+  "guide_count": 6,
+  "offline_readme_images": {
+    "README.md": 7,
+    "README.zh-CN.md": 7
+  },
+  "package_entries": 70,
+  "package_bytes": 3343691
+}
