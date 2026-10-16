@@ -23,5 +23,8 @@ for (const name of ["@jsquash/webp", "@jsquash/jpeg", "@jsquash/png", "@jsquash/
 const output = fs.createWriteStream(path.join(root, "package.zip"));
 const archive = archiver("zip", { zlib: { level: 9 } });
 const complete = new Promise((resolve, reject) => { output.on("close", resolve); output.on("error", reject); archive.on("error", reject); });
-archive.pipe(output); archive.directory(path.join(root, "dist"), false); await archive.finalize(); await complete;
+archive.pipe(output);
+// Exclude documentation artwork even when dist contains files from an older build.
+archive.glob("**/*", { cwd: path.join(root, "dist"), ignore: ["assets/guide/**", "assets/marketing/**"] });
+await archive.finalize(); await complete;
 console.log(`package.zip: ${archive.pointer()} bytes`);

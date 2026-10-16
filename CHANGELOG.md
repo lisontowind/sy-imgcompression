@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1 — 2026-10-16
+
+- 教程截图和宣传素材移出安装包，中英文 README 改用公开图片链接；查看说明图片需要联网。
+- 集市预览图保持 1024 × 768，从 412,517 B 压缩至 208,369 B，高清原稿保留。
+- 打包时排除旧构建目录中残留的教程及宣传素材，保留图标、预览图、离线编码器和许可证。
+- 更新素材导出脚本与验证记录；安装包从约 3.19 MiB 缩小至约 821 KiB，图片处理继续完全离线。
+
+Move guide and promotional artwork out of the plugin package and load README
+images from repository URLs. Reduce the 1024 × 768 preview by 49.5%, keep the
+full-resolution master, and exclude stale documentation artwork when packaging.
+The plugin archive is about 75% smaller than 0.1.0; image processing stays offline.
+
 ## 0.1.0 — 2026-10-16
 
 首次发布 / Initial release.

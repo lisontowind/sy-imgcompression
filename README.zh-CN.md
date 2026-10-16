@@ -1,6 +1,6 @@
 # 思源图片压缩
 
-![思源图片压缩插件题头图](assets/marketing/header.png)
+![思源图片压缩插件题头图](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/marketing/header.png)
 
 图片压缩为主功能，图片批量重命名为独立辅助功能。面向桌面版思源 3.8.5 及以上；
 内核还必须提供完整的 `findAssetReferences`、`relinkAsset` 接口。缺少接口或无法完整
@@ -43,41 +43,43 @@
 
 ## 图解使用
 
+教程截图和宣传图通过仓库链接加载，查看图片需要联网；图片压缩功能仍完全本地离线运行。
+
 ### 1. 批量压缩
 
 扫描当前文档，选择预设和尺寸，核对附件总大小，再应用到勾选图片。
 
-![批量压缩操作说明](assets/guide/01-batch-compression.png)
+![批量压缩操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/01-batch-compression.png)
 
 ### 2. 逐图配置
 
 每张图片可以独立设置质量、格式和缩放；保存后不受全局参数修改影响。
 
-![逐图配置操作说明](assets/guide/02-individual-settings.png)
+![逐图配置操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/02-individual-settings.png)
 
 ### 3. 点击生成压缩预览
 
 先对比尺寸、体积和画面，再返回主面板应用。查看原图本身不会触发压缩。
 
-![压缩预览操作说明](assets/guide/03-compression-preview.png)
+![压缩预览操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/03-compression-preview.png)
 
 ### 4. 自定义图片名称
 
 统一设置前缀，或逐张单独命名；思源 ID 与原扩展名自动保留。
 
-![自定义命名操作说明](assets/guide/04-custom-names.png)
+![自定义命名操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/04-custom-names.png)
 
 ### 5. 右键快捷压缩
 
 在独立选项框保存常用配置，之后从图片右键直接执行快捷压缩。
 
-![右键快捷压缩配置说明](assets/guide/05-quick-compression.png)
+![右键快捷压缩配置说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/05-quick-compression.png)
 
 ### 6. 任务记录与恢复
 
 原文件保留供恢复，文件缩减量不等于磁盘空间立即释放。恢复前会核验文件及引用。
 
-![任务记录与恢复说明](assets/guide/06-history-recovery.png)
+![任务记录与恢复说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/06-history-recovery.png)
 
 ## 共享引用与恢复
 
@@ -109,6 +111,8 @@ npm run dev
 ```
 
 构建结果在 `dist/`，`package.zip` 根目录直接包含插件文件。
-不使用 CDN、外部 API Key 或云端压缩，不自动压缩粘贴图片，不后台清理原附件。
+安装包不包含教程截图和宣传素材，保留 `icon.png`、`preview.png`；
+运行 `npm run package:assets` 可单独打包上架素材。
+图片处理不使用 CDN、外部 API Key 或云端压缩，不自动压缩粘贴图片，不后台清理原附件。
 第三方声明见 `THIRD-PARTY-NOTICES.md` 及安装包中的 `licenses/`。
 测试结果和平台覆盖情况见源码仓库中的 `VALIDATION.md`。

@@ -1,6 +1,6 @@
 # Image Compression for SiYuan
 
-![Image Compression for SiYuan](assets/marketing/header.png)
+![Image Compression for SiYuan](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/marketing/header.png)
 
 Offline image compression comes first. An independent image-renaming tab simplifies
 image filenames while preserving terminal SiYuan IDs. Desktop SiYuan 3.8.5 or newer is required;
@@ -54,30 +54,32 @@ Old journals, including document-prefix renames, remain recoverable.
 ## Illustrated guide (Chinese)
 
 The illustrations below use the actual plugin interface with example documents.
+Guide and promotional images are hosted in the repository and require an internet
+connection to view. Image compression itself remains fully offline.
 
 1. Choose batch settings and review attachment totals before applying.
 
-![Batch compression](assets/guide/01-batch-compression.png)
+![Batch compression](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/01-batch-compression.png)
 
 2. Set independent parameters for individual images.
 
-![Individual image settings](assets/guide/02-individual-settings.png)
+![Individual image settings](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/02-individual-settings.png)
 
 3. Generate a preview explicitly, compare the results, then apply from the main panel.
 
-![Compression preview](assets/guide/03-compression-preview.png)
+![Compression preview](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/03-compression-preview.png)
 
 4. Use a batch prefix or individual names while retaining SiYuan IDs and extensions.
 
-![Custom image names](assets/guide/04-custom-names.png)
+![Custom image names](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/04-custom-names.png)
 
 5. Save independent quick settings and compress directly from the image context menu.
 
-![Quick compression settings](assets/guide/05-quick-compression.png)
+![Quick compression settings](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/05-quick-compression.png)
 
 6. Review job results and restore matching references. Original files are retained.
 
-![History and recovery](assets/guide/06-history-recovery.png)
+![History and recovery](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/06-history-recovery.png)
 
 ## Shared attachments and recovery
 
@@ -116,7 +118,10 @@ npm run dev
 ```
 
 Build output is in `dist/`; `package.zip` has plugin files at the archive root.
-No CDN, external API key, cloud compression, automatic paste handling or background
-original-file cleanup is used. See `THIRD-PARTY-NOTICES.md` and `licenses/` in the package.
+Guide and promotional artwork is excluded from the plugin package; `icon.png` and
+`preview.png` are retained. Run `npm run package:assets` for the separate artwork archive.
+Image processing uses no CDN, external API key or cloud compression. Automatic paste
+handling and background original-file cleanup are disabled.
+See `THIRD-PARTY-NOTICES.md` and `licenses/` in the package.
 
 For verification results and platform coverage, see `VALIDATION.md` in the source repository.

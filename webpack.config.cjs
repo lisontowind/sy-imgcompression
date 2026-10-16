@@ -20,8 +20,6 @@ module.exports = (_, argv) => [
       { from: "plugin.json" }, { from: "src/i18n", to: "i18n" }, { from: "README*.md", to: "[name][ext]" },
       { from: "LICENSE" }, { from: "THIRD-PARTY-NOTICES.md" }, { from: "VALIDATION.md" },
       { from: "icon.png" }, { from: "preview.png" },
-      { from: "assets/guide", to: "assets/guide", noErrorOnMissing: true },
-      { from: "assets/marketing", to: "assets/marketing", noErrorOnMissing: true },
     ] })],
   },
   { ...shared, name: "worker", target: "webworker", entry: "./src/compression/compression.worker.ts", devtool: false,

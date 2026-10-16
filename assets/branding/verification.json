@@ -12,13 +12,17 @@
   "preview": {
     "width": 1024,
     "height": 768,
-    "bytes": 412517
+    "bytes": 208369,
+    "palette_optimizer": "pngquant 2.17.0",
+    "quality_range": "75-85",
+    "visual_review": "Text and gradients checked at 1024x768"
   },
   "guide_count": 6,
-  "offline_readme_images": {
+  "package_entries": 60,
+  "package_bytes": 840685,
+  "linked_readme_images": {
     "README.md": 7,
     "README.zh-CN.md": 7
   },
-  "package_entries": 70,
-  "package_bytes": 3343691
+  "version": "0.1.1"
 }
