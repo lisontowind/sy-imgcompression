@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.2 — 2026-10-18
+
+- 英文 README 使用独立英文题头图及六张英文教程图，界面、步骤说明和示例名称均为英文。
+- 截图脚本支持中英文双语输出和单语言重拍，并检查中文残留、说明文字越界及标记位置。
+- 素材包新增英文图片、题头原稿及提示词，更新素材清单和验证记录；中文配图保持原样。
+- 图片处理功能和运行代码保持不变，继续完全本地离线运行。
+
+Add an English header and six illustrated guides captured from the actual English
+plugin interface. Localize annotations and example names, support reproducible
+bilingual captures, and include the English artwork and source prompt in the
+separate materials archive. Plugin runtime behavior is unchanged.
+
 ## 0.1.1 — 2026-10-16
 
 - 教程截图和宣传素材移出安装包，中英文 README 改用公开图片链接；查看说明图片需要联网。

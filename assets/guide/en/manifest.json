@@ -1,0 +1,127 @@
+{
+  "source": "Production plugin + isolated SiYuan kernel + browser host adapter; annotations added in the capture page.",
+  "language": "en_US",
+  "documentId": "20261018165452-a9yfkmx",
+  "images": [
+    {
+      "file": "01-batch-compression.png",
+      "title": "Batch compression starts with your document",
+      "notes": [
+        [
+          "Choose your settings",
+          "Balanced is the default preset. Keep the original dimensions or scale down while preserving the aspect ratio."
+        ],
+        [
+          "Review attachment size",
+          "The total includes all local attachments in this document. Each path counts once, regardless of filters or selection."
+        ],
+        [
+          "Select, then apply",
+          "Only selected static JPEG, PNG and WebP images are processed. Results with no size savings are skipped."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    },
+    {
+      "file": "02-individual-settings.png",
+      "title": "Give each image its own settings",
+      "notes": [
+        [
+          "Adjust this image",
+          "Set quality, format, scale or a pixel limit. This example scales the cover image to 50%."
+        ],
+        [
+          "Save an override",
+          "This image keeps its own settings. Images without an override continue to inherit the global settings."
+        ],
+        [
+          "Check the output size",
+          "Review original and expected dimensions. Images are never enlarged. Restore inheritance from the main list."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    },
+    {
+      "file": "03-compression-preview.png",
+      "title": "Compare the preview before applying",
+      "notes": [
+        [
+          "Generate on demand",
+          "Click Generate compression preview to run compression. After changing settings, generate a new preview."
+        ],
+        [
+          "Compare size and quality",
+          "View the original and compressed image together. Check dimensions, file sizes and the actual file reduction."
+        ],
+        [
+          "Apply from the main panel",
+          "Previewing leaves references unchanged. Return to the main panel and apply to write files and update references."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    },
+    {
+      "file": "04-custom-names.png",
+      "title": "Use a batch prefix or individual names",
+      "notes": [
+        [
+          "Set a batch prefix",
+          "The default prefix is image. This example uses project for images without an individual name."
+        ],
+        [
+          "Name individual images",
+          "Enter a name such as cover in a row. It overrides the batch prefix and stays unchanged when the prefix changes."
+        ],
+        [
+          "Review the full filename",
+          "The final filename appears below the input. Clear an individual name or choose Use batch prefix to inherit."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    },
+    {
+      "file": "05-quick-compression.png",
+      "title": "Save settings for quick compression",
+      "notes": [
+        [
+          "Open settings directly",
+          "Open Quick compression settings from an image context menu or the main panel. No attachment scan is needed."
+        ],
+        [
+          "Save your preferences",
+          "Quick settings are saved independently of the batch panel. This example uses Balanced, WebP and 75% scale."
+        ],
+        [
+          "Choose a useful size",
+          "Scaling preserves the aspect ratio. Once saved, Quick compress runs directly and records the job in task history."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    },
+    {
+      "file": "06-history-recovery.png",
+      "title": "Review tasks and recover references",
+      "notes": [
+        [
+          "Review each result",
+          "Task history lists source and target paths, with completed, skipped or failed states for each image."
+        ],
+        [
+          "Restore matching references",
+          "Recovery verifies files and references. Later edits or new references block a conflicting recovery."
+        ],
+        [
+          "Keep originals for recovery",
+          "Originals are never deleted automatically. When recovery is no longer needed, review unreferenced assets in SiYuan."
+        ]
+      ],
+      "width": 1600,
+      "height": 1200
+    }
+  ]
+}

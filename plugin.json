@@ -2,7 +2,7 @@
   "name": "sy-imgcompression",
   "author": "Lisontowind",
   "url": "https://github.com/lisontowind/sy-imgcompression",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "3.8.5",
   "backends": ["windows", "linux", "darwin"],
   "frontends": ["desktop", "desktop-window"],

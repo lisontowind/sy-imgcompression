@@ -330,9 +330,13 @@ try {
     assert((await page.locator('.syic-total').textContent()).includes('0 B'));assert(await page.getByRole('button',{name:'应用到选中附件',exact:true}).isDisabled());
   });
   if (process.env.SYIC_GENERATE_GUIDE === "1") {
-    messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/zh_CN.json"), "utf8"));
+    const languages = (process.env.SYIC_GUIDE_LANGUAGE || "zh_CN,en_US").split(",");
+    assert(languages.every(language => ["zh_CN", "en_US"].includes(language)), "Unsupported guide language");
     const { createGuide } = await import("./guide-images.mjs");
-    await createGuide({ page, api, put, root, bookA, pdfPath, setActive: id => { activeId = id; } });
+    for (const language of languages) {
+      messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n", language + ".json"), "utf8"));
+      await createGuide({ page, api, put, root, bookA, pdfPath, language, messages, setActive: id => { activeId = id; } });
+    }
   }
   assert.deepEqual(pageErrors, []); assert.deepEqual(external, []);
   fs.writeFileSync(path.join(testRoot, "result.json"), JSON.stringify({ version, results, pageErrors, external, workspace }, null, 2));

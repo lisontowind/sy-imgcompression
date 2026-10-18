@@ -3,7 +3,7 @@ import path from "node:path";
 import archiver from "archiver";
 
 const root = path.resolve(import.meta.dirname, "..");
-for (const name of ["icon.png", "preview.png", "assets/marketing/header.png", "assets/guide/manifest.json", "assets/branding/prompts.json"]) {
+for (const name of ["icon.png", "preview.png", "assets/marketing/header.png", "assets/marketing/header-en.png", "assets/guide/manifest.json", "assets/guide/en/manifest.json", "assets/branding/prompts.json"]) {
   if (!fs.existsSync(path.join(root, name))) throw new Error("Missing deliverable: " + name);
 }
 const output = fs.createWriteStream(path.join(root, "marketplace-materials.zip"));
