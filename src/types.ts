@@ -45,8 +45,8 @@ export interface Journal { jobs: AssetJob[] }
 export interface Progress { done: number; total: number; path: string; stage: string }
 export interface DirectoryEntry { name: string; isDir: boolean; isSymlink?: boolean; updated: number }
 export interface Kernel {
-  post<T>(endpoint: string, body: unknown): Promise<T>;
-  readFile(path: string): Promise<ArrayBuffer>;
+  post<T>(endpoint: string, body: unknown, signal?: AbortSignal): Promise<T>;
+  readFile(path: string, signal?: AbortSignal): Promise<ArrayBuffer>;
   putFile(path: string, bytes: ArrayBuffer): Promise<void>;
 }
 export class UserError extends Error {

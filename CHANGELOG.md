@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3 — 2026-11-04
+
+- 修复多窗口任务日志覆盖：执行与恢复前在跨窗口锁内刷新日志，恢复操作使用最新持久状态。
+- 日志直接通过内核文件接口读取和保存，读取失败不使用宿主旧缓存，保存时检查内核响应。
+- 修复预览在读取或计算摘要期间取消后仍启动压缩的问题，并支持中断预览文件请求。
+- 扫描取消覆盖文档读取、目录遍历、附件统计、引用查询及数据库分页；关闭面板或卸载插件时中断相关扫描。
+- 超过 50 MiB 的图片在读取前跳过，减少无效分配；保留读取后的大小与图像校验。
+- 勾选与压缩参数修改保留表格行及缩略图节点，历史任务明细在展开时渲染。
+
+Preserve task history across windows, reload persisted recovery state under the
+mutation lock, and check kernel acknowledgements when saving journals. Cancel
+read-only scans and preview reads promptly, reject oversized images before
+loading them, retain thumbnails during selection/settings changes, and render
+history items on expansion.
+
 ## 0.1.2 — 2026-10-18
 
 - 英文 README 使用独立英文题头图及六张英文教程图，界面、步骤说明和示例名称均为英文。

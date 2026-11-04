@@ -100,13 +100,18 @@ unsupported references block writes. Unlocking alone cannot make an unsupported
 encrypted notebook eligible; resolve that workspace limitation before using this plugin.
 Third-party private data and references outside this workspace cannot be migrated.
 
-Jobs are persisted through the plugin's `jobs.json` storage. An operation whose result
+Jobs are persisted through the plugin's `jobs.json` storage. Execution and recovery
+reload the latest journal under a cross-window lock, preserving other windows' jobs.
+Failed reads never fall back to a cached journal; saves check the kernel response.
+An operation whose result
 is unknown after a crash is never replayed automatically. Use **Task history & recovery**.
 Recovery verifies source/target hashes and the reference locations/values before
 relinking back; changed or newly added references block recovery rather than overwrite
 new edits. Keep the original files until recovery is no longer needed. Cancellation
 waits for an in-flight mutation to finish and verifies/reverts the current attachment;
 earlier completed attachments remain completed and can be restored from history.
+Cancelling a scan or closing its panel aborts read-only requests. Cancelling a
+preview also stops its file request and prevents a late compression from starting.
 
 ## Development
 

@@ -5,7 +5,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 
 const root = path.resolve(import.meta.dirname, "..");
 const kernelPath = process.env.SIYUAN_KERNEL || "C:/Program Files/SiYuan/resources/kernel/SiYuan-Kernel.exe";
@@ -26,6 +26,10 @@ async function api(endpoint, body = {}) {
   const data = await r.json(); if (data.code !== 0) throw new Error(endpoint + ": " + data.msg); return data.data;
 }
 const results = [];
+async function readJournal() {
+  const response = await fetch(origin + '/api/file/getFile', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Token ' + token }, body: JSON.stringify({ path: '/data/storage/petal/sy-imgcompression/jobs.json' }) });
+  assert.equal(response.status, 200); return response.json();
+}
 async function check(name, fn) { if (process.env.SYIC_GUIDE_ONLY === "1") return; await fn(); results.push(name); console.log("PASS " + name); }
 try {
   console.log("Starting isolated SiYuan kernel…");
@@ -209,7 +213,7 @@ try {
   await check("compression migrates all references and preserves closed notebook state", async () => {
     await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), { timeout: 30000 });
-    const job = await page.evaluate(() => JSON.parse(localStorage.getItem("jobs.json")).jobs[0]);
+    const job = (await readJournal()).jobs[0];
     assert.equal(job.items[0].state, "completed");
     const old = await api("/api/asset/findAssetReferences", { path: assetPath }); assert(!old.references.some(ref => !["annotation-file", "ocr"].includes(ref.type)));
     const after = await api("/api/asset/findAssetReferences", { path: job.items[0].newPath }); assert(after.references.some(ref => ref.rootID === closedId));
@@ -237,7 +241,7 @@ try {
     await page.screenshot({ path: path.join(testRoot, "rename-preview.png"), fullPage: true });
     await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), { timeout: 30000 });
-    const job = await page.evaluate(() => JSON.parse(localStorage.getItem("jobs.json")).jobs[0]); assert.equal(job.kind, "rename"); assert.equal(job.items[0].state, "completed");
+    const job = (await readJournal()).jobs[0]; assert.equal(job.kind, "rename"); assert.equal(job.items[0].state, "completed");
     assert.equal(job.items[0].newPath, "assets/" + finalName);
     assert((await api("/api/asset/findAssetReferences", { path: job.items[0].newPath })).references.some(ref => ref.rootID === closedId));
   });
@@ -272,9 +276,11 @@ try {
       window.__events['open-menu-image']({detail:{menu:{addItem:item=>items.push(item)},element:image,protyle:{block:{rootID:id},disabled:false}}});
       items.find(item=>item.label==='Quick compress').click();
     }, { id: activeId, assetPath });
-    await page.waitForFunction(() => {const jobs=JSON.parse(localStorage.getItem('jobs.json')||'{"jobs":[]}').jobs;return jobs.length===3&&jobs[0].state==='completed';}, { timeout: 30000 });
+    await expect.poll(async () => {
+      const { jobs } = await readJournal(); return jobs.length === 3 && jobs[0].state === 'completed';
+    }, { timeout: 30000 }).toBe(true);
     assert.equal(await page.locator("section").count(), count);
-    const job = await page.evaluate(() => JSON.parse(localStorage.getItem('jobs.json')).jobs[0]);
+    const job = (await readJournal()).jobs[0];
     assert.deepEqual(job.items[0].compressionOptions.resize, { mode: 'percent', value: 50 });
     const dimensions = await page.evaluate(async path => { const image=await createImageBitmap(await (await fetch('/'+path)).blob());const size=[image.width,image.height];image.close();return size; }, job.items[0].newPath);
     assert.deepEqual(dimensions, [256,192]);
@@ -293,7 +299,7 @@ try {
     assert((await page.locator('.syic-item-config').first().textContent()).includes('50%'));
     await page.getByRole('button',{name:'Apply to selected attachments',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('.syic-status')?.textContent?.startsWith('Completed'),{timeout:30000});
-    const job=await page.evaluate(()=>JSON.parse(localStorage.getItem('jobs.json')).jobs[0]);assert.equal(job.items.length,2);
+    const job=(await readJournal()).jobs[0];assert.equal(job.items.length,2);
     const sizes=await page.evaluate(async items=>Promise.all(items.map(async item=>{const bitmap=await createImageBitmap(await(await fetch('/'+item.newPath)).blob());const size=[bitmap.width,bitmap.height];bitmap.close();return size;})),job.items);
     assert.deepEqual(sizes,[[128,96],[512,384]]);assert.equal(job.items[0].compressionOptions.quality,82);assert.equal(job.items[1].compressionOptions.quality,70);
   });
@@ -328,6 +334,41 @@ try {
     await page.reload(); await page.evaluate(async()=>{await window.__plugin.onload();window.__open();});
     await page.waitForFunction(()=>document.querySelector('.syic-status')?.textContent==='当前文档没有本地附件。',{timeout:30000});
     assert((await page.locator('.syic-total').textContent()).includes('0 B'));assert(await page.getByRole('button',{name:'应用到选中附件',exact:true}).isDisabled());
+  });
+  await check("two windows retain each other's durable jobs and restore using the latest journal", async () => {
+    messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/en_US.json"), "utf8"));
+    const originalIds = (await readJournal()).jobs.map(job => job.id), windows = [], documentIds = [];
+    const windowContext = await browser.newContext();
+    try {
+      // Initialize both windows before either writes a task, leaving the second
+      // window with an intentionally stale in-memory journal.
+      for (const name of ["Window A", "Window B"]) {
+        const imagePath = `assets/${name.replace(' ', '-')}-20261016000300-abcdefg.png`;
+        await put('/data/' + imagePath, new Uint8Array(source));
+        activeId = await api('/api/filetree/createDocWithMd', { notebook: bookA, path: '/' + name, markdown: `![fixture](${imagePath})` });
+        documentIds.push(activeId);
+        const window = await windowContext.newPage(); windows.push(window);
+        window.on('pageerror', error => pageErrors.push(String(error)));
+        window.on('request', req => { if (!req.url().startsWith(testOrigin) && !req.url().startsWith('blob:')) external.push(req.url()); });
+        await window.goto(testOrigin);
+        await window.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+        await window.waitForFunction(() => document.querySelector('.syic-status')?.textContent === 'Ready');
+      }
+      for (const window of windows) {
+        await window.getByRole('button', { name: 'Apply to selected attachments', exact: true }).click();
+        await window.waitForFunction(() => document.querySelector('.syic-status')?.textContent?.startsWith('Completed'));
+      }
+      const latest = await readJournal();
+      assert.equal(latest.jobs.length, originalIds.length + 2);
+      assert.deepEqual(latest.jobs.slice(0, 2).map(job => job.documentId), [...documentIds].reverse());
+      assert.deepEqual(latest.jobs.slice(2).map(job => job.id), originalIds);
+      await windows[0].locator('.syic-history > details').first().locator('summary').click();
+      await windows[0].getByRole('button', { name: 'Restore matching references', exact: true }).first().click();
+      await windows[0].waitForFunction(() => document.querySelector('.syic-status')?.textContent === 'Restored');
+      const restored = await readJournal();
+      assert.equal(restored.jobs[0].state, 'completed'); assert.equal(restored.jobs[1].state, 'restored');
+      assert.equal(restored.jobs.length, latest.jobs.length);
+    } finally { await windowContext.close(); }
   });
   if (process.env.SYIC_GENERATE_GUIDE === "1") {
     const languages = (process.env.SYIC_GUIDE_LANGUAGE || "zh_CN,en_US").split(",");

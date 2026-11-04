@@ -1,6 +1,7 @@
 import { KernelError } from "../api";
 import { AssetReference, Kernel, ReferenceReport, UserError } from "../types";
 import { requestPath, rewriteReference } from "./paths";
+import { checkCancelled } from "./cancellation";
 
 export function assertComplete(report: ReferenceReport): void {
   if (!report || !Array.isArray(report.references) || !Array.isArray(report.skippedNotebooks)) throw new UserError("unsupportedKernel");
@@ -11,14 +12,15 @@ export function assertComplete(report: ReferenceReport): void {
   if (report.items?.some(item => !item.ok)) throw new UserError("incompleteScan", report.items.filter(x => !x.ok).map(x => x.reason).join(", "));
 }
 
-export async function findReferences(kernel: Kernel, path: string): Promise<ReferenceReport> {
+export async function findReferences(kernel: Kernel, path: string, signal?: AbortSignal): Promise<ReferenceReport> {
+  checkCancelled(signal);
   let report: ReferenceReport;
-  try { report = await kernel.post<ReferenceReport>("/api/asset/findAssetReferences", { path: requestPath(path) }); }
+  try { report = await kernel.post<ReferenceReport>("/api/asset/findAssetReferences", { path: requestPath(path) }, signal); }
   catch (error) {
     if (error instanceof KernelError && /404|not found|not supported|unknown.*api/i.test(error.message)) throw new UserError("unsupportedKernel");
     throw error;
   }
-  assertComplete(report); return report;
+  checkCancelled(signal); assertComplete(report); return report;
 }
 
 export async function relink(kernel: Kernel, oldPath: string, newPath: string, dryRun: boolean): Promise<ReferenceReport> {

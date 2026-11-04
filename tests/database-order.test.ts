@@ -3,6 +3,14 @@ import { expect, it, vi } from "vitest";
 import { databaseViewPaths } from "../src/core/database-order";
 import { Kernel } from "../src/types";
 
+it("stops database pagination immediately after cancellation", async () => {
+  const controller = new AbortController();
+  const post = vi.fn(async () => { controller.abort(); return { view: { rowCount: 2, rows: [{ id: "a", cells: [] }] } }; });
+  const block = '<div data-type="NodeAttributeView" data-av-id="20261016000000-abcdefg"></div>';
+  await expect(databaseViewPaths({ post } as unknown as Kernel, block, controller.signal)).rejects.toThrow("cancelled");
+  expect(post).toHaveBeenCalledTimes(1);
+});
+
 it("uses rendered database row order, pagination and mirror deduplication", async () => {
   const post = vi.fn().mockResolvedValueOnce({ view: { rowCount: 3, rows: [
     { id: "b", cells: [{ value: { mAsset: [{ content: "assets/b.png" }] } }] },

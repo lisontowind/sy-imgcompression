@@ -25,41 +25,55 @@ export class JobManager {
   journal: Journal = { jobs: [] };
   busy = false;
   private cancelled = false;
+  private previewController?: AbortController;
   private compressor: Compressor;
   onProgress?: (progress: Progress) => void;
   onChange?: () => void;
   constructor(private kernel: Kernel, private store: JournalStore, compressor?: Compressor) { this.compressor = compressor || new CompressionClient(); }
   async initialize(): Promise<void> {
+    if (typeof navigator !== "undefined" && navigator.locks) {
+      await navigator.locks.request("sy-imgcompression:asset-job", { ifAvailable: true }, lock => this.reload(!!lock));
+    } else await this.reload(true);
+  }
+  private async reload(recoverInterrupted: boolean): Promise<void> {
     const saved = await this.store.load();
     if (saved !== undefined) {
-      if (!saved || !Array.isArray(saved.jobs) || saved.jobs.some(job => job.schema !== 1 || !Array.isArray(job.items))) throw new UserError("invalidJournal");
-      this.journal = saved;
+      if (!saved || !Array.isArray(saved.jobs) || saved.jobs.some(job => !job || job.schema !== 1 || !Array.isArray(job.items))) throw new UserError("invalidJournal");
+      const previous = new Map(this.journal.jobs.map(job => [job.id, job]));
+      this.journal = { jobs: structuredClone(saved.jobs).map(job => Object.assign(previous.get(job.id) || {}, job) as AssetJob) };
       let changed = false;
-      for (const job of saved.jobs) if (job.state === "running") {
+      for (const job of this.journal.jobs) if (recoverInterrupted && job.state === "running") {
         job.state = "interrupted"; changed = true;
         for (const item of job.items) if (item.state === "applying") item.state = "recovery-required";
       }
       if (changed) await this.save();
-    }
+    } else this.journal = { jobs: [] };
   }
   private async save(): Promise<void> { await this.store.save(this.journal); this.onChange?.(); }
-  cancel(): void { this.cancelled = true; this.compressor.cancel(); }
+  cancel(): void { this.cancelled = true; this.previewController?.abort(); this.compressor.cancel(); }
   private checkCancelled(): void { if (this.cancelled) throw new UserError("cancelled"); }
   async preview(asset: AssetIdentity, options: CompressionOptions): Promise<{ source: ArrayBuffer; result: CompressionResult }> {
     if (this.busy) throw new UserError("busy");
     this.busy = true; this.cancelled = false;
+    const controller = new AbortController(); this.previewController = controller;
     try {
-      const source = await this.readSource(asset);
+      validateCompression(options);
+      const source = await this.readSource(asset, true, controller.signal);
+      this.checkCancelled();
       asset.previewDigest = await digest(source);
+      this.checkCancelled();
       const result = await this.compressor.compress(source.slice(0), options);
+      this.checkCancelled();
       return { source, result };
-    } finally { this.busy = false; }
+    } finally { this.previewController = undefined; this.busy = false; }
   }
-  private async readSource(asset: AssetIdentity): Promise<ArrayBuffer> {
+  private async readSource(asset: AssetIdentity, compress = false, signal?: AbortSignal): Promise<ArrayBuffer> {
     if (asset.blockers.length || !asset.diskPath) throw new UserError("blockedAsset", asset.blockers.join(", "));
+    if (compress && asset.size > MAX_BYTES) throw new UserError("imageTooLarge");
     // Keep renderer allocations bounded for large non-image attachments too.
     if (asset.size > 256 * 1024 * 1024) throw new UserError("attachmentTooLarge");
-    const bytes = await this.kernel.readFile(asset.diskPath);
+    const bytes = await this.kernel.readFile(asset.diskPath, signal);
+    this.checkCancelled();
     if (bytes.byteLength !== asset.size) throw new UserError("sourceChanged", asset.path);
     return bytes;
   }
@@ -89,7 +103,7 @@ export class JobManager {
             const current = await findReferences(this.kernel, asset.path);
             if (referenceFingerprint(current.references) !== referenceFingerprint(asset.references)) throw new UserError("sourceChanged", asset.path);
             item.before = current.references;
-            const source = await this.readSource(asset);
+            const source = await this.readSource(asset, kind === "compress");
             item.sourceDigest = await digest(source);
             if (asset.previewDigest && item.sourceDigest !== asset.previewDigest) throw new UserError("sourceChanged", asset.path);
             this.checkCancelled();
@@ -158,6 +172,9 @@ export class JobManager {
   }
   async restore(job: AssetJob): Promise<void> {
     return this.exclusive(async () => {
+      const current = this.journal.jobs.find(value => value.id === job.id);
+      if (!current) throw new UserError("restoreConflict");
+      job = current;
       for (const item of [...job.items].reverse()) {
         if (!["completed", "applying", "recovery-required"].includes(item.state)) continue;
         this.checkCancelled();
@@ -185,13 +202,19 @@ export class JobManager {
   private async exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (this.busy) throw new UserError("busy");
     this.busy = true; this.cancelled = false;
+    const execute = async () => {
+      // Reload only while owning the mutation lock; another window may have
+      // completed or restored jobs since this manager was initialized.
+      await this.reload(true); this.checkCancelled();
+      return action();
+    };
     try {
       if (typeof navigator !== "undefined" && navigator.locks) {
         return await navigator.locks.request("sy-imgcompression:asset-job", { ifAvailable: true }, async lock => {
-          if (!lock) throw new UserError("busy"); return action();
+          if (!lock) throw new UserError("busy"); return execute();
         });
       }
-      return await action();
+      return await execute();
     } finally { this.busy = false; this.onChange?.(); }
   }
 }

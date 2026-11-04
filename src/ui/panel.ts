@@ -18,7 +18,7 @@ export class AttachmentPanel {
   private document?: DocumentAssets;
   private mode: JobKind;
   private working = false;
-  private scanCancelled = false;
+  private scanController?: AbortController;
   private disposed = false;
   private profile = defaultProfile();
   private perImage = new Map<string, CompressionProfile>();
@@ -47,7 +47,7 @@ export class AttachmentPanel {
     this.status.setAttribute("role", "status"); this.status.setAttribute("aria-live", "polite");
     this.scanButton = this.button(t("scan"), () => this.scan());
     this.applyButton = this.button(t("apply"), () => this.apply());
-    this.cancelButton = this.button(t("cancel"), () => { this.scanCancelled = true; manager.cancel(); this.message(t("cancelHint")); });
+    this.cancelButton = this.button(t("cancel"), () => { this.scanController?.abort(); manager.cancel(); this.message(t("cancelHint")); });
     const actions = element("div", "syic-actions"); actions.append(this.scanButton, this.applyButton, this.cancelButton);
     this.applyButton.classList.add("syic-primary");
     root.append(this.tabs, this.controls, actions, this.status, this.summary, this.list,
@@ -59,7 +59,7 @@ export class AttachmentPanel {
   }
   async start(): Promise<void> { if (this.documentId) await this.scan(); else this.message(this.t("openDocument")); }
   async refreshExternal(): Promise<void> { if (!this.disposed && !this.working && !this.manager.busy) await this.scan(); }
-  dispose(): void { this.disposed = true; this.releasePreview(); this.manager.onProgress = undefined; this.manager.onChange = undefined; }
+  dispose(): void { this.disposed = true; this.scanController?.abort(); this.releasePreview(); this.manager.onProgress = undefined; this.manager.onChange = undefined; }
   private releasePreview(): void { this.child?.destroy(); this.child = undefined; this.previewChanged = undefined; }
   private childPanel(title: string): ChildPanel {
     this.releasePreview();
@@ -116,11 +116,11 @@ export class AttachmentPanel {
       const selected = this.document?.assets.filter(asset => asset.selected) || [];
       const editor = element("div", "syic-profile syic-global-profile"); this.controls.append(editor);
       profileEditor(editor, this.profile, this.t, () => {
-        this.previewChanged?.(); this.renderList();
+        this.previewChanged?.(); this.refreshCompressionSettings();
         void this.services?.save("global", cloneProfile(this.profile)).catch(error => this.error(error));
       }, selected.length > 0 && selected.every(asset => asset.extension.toLowerCase() === ".png"));
       const quick = this.button(this.t("quickSettings"), () => this.editQuick());
-      const reset = this.button(this.t("resetAllOverrides"), () => { this.perImage.clear(); this.previewChanged?.(); this.renderList(); });
+      const reset = this.button(this.t("resetAllOverrides"), () => { this.perImage.clear(); this.previewChanged?.(); this.refreshCompressionSettings(); });
       reset.classList.add("syic-quiet-button"); tools.append(quick, reset);
     } else {
       const prefix = this.renameInput(this.renameOptions.prefix || "image", value => {
@@ -156,23 +156,22 @@ export class AttachmentPanel {
     if (!this.document) { this.updateButtons(); return; }
     try { if (this.mode === "rename") assignRenamePaths(this.document.assets, this.document.title, this.renameOptions); }
     catch (error) { this.error(error); this.applyButton.disabled = true; return; }
-    this.summary.append(element("strong", "syic-doc-title", `${this.t("document")}: ${this.document.title}`));
-    if (this.document.stats) this.summary.append(element("div", "syic-total", statsText(this.document.stats, this.t)));
     const visible = this.visible();
     if (!visible.length) this.list.append(element("p", "syic-note", this.t(this.document.stats?.count === 0 ? "noAttachments" : "empty")));
     const table = element("table", "syic-table"), head = element("thead"), header = element("tr");
     const selectHeader = element("th"), selectAll = element("input"); selectAll.type = "checkbox"; selectAll.setAttribute("aria-label", this.t("selectAll"));
     const available = (asset: AssetIdentity) => this.available(asset);
     selectAll.checked = visible.some(available) && visible.filter(available).every(x => x.selected);
-    selectAll.addEventListener("change", () => { visible.forEach(asset => { if (available(asset)) asset.selected = selectAll.checked; }); this.renderControls(); this.renderList(); });
+    selectAll.addEventListener("change", () => { visible.forEach(asset => { if (available(asset)) asset.selected = selectAll.checked; }); this.renderControls(); this.updateSelection(); });
     selectHeader.append(selectAll); header.append(selectHeader);
     ["thumbnail", "name", ...(this.mode === "rename" ? ["newName"] : ["imageSettings"]), "size", "references", "status"].forEach(key => header.append(element("th", "", this.t(key))));
     head.append(header); table.append(head); const body = element("tbody");
     for (const asset of visible) {
       const row = element("tr"), selectCell = element("td"), checkbox = element("input"); checkbox.type = "checkbox"; checkbox.checked = asset.selected;
+      row.dataset.assetPath = asset.path;
       const unsupportedImage = this.mode === "compress" && !isImageExtension(asset.extension);
       checkbox.disabled = !available(asset) || this.working || this.manager.busy; checkbox.setAttribute("aria-label", asset.name);
-      checkbox.addEventListener("change", () => { asset.selected = checkbox.checked; this.renderControls(); this.renderList(); }); selectCell.append(checkbox);
+      checkbox.addEventListener("change", () => { asset.selected = checkbox.checked; this.renderControls(); this.updateSelection(); }); selectCell.append(checkbox);
       const thumb = element("td");
       if (isImageAttachment(asset.extension)) {
         const view = this.button(this.t("viewImage"), () => { originalImage(this.childPanel(asset.name).root, asset, this.t); });
@@ -201,11 +200,7 @@ export class AttachmentPanel {
       }
       else {
         const config = element("td", "syic-item-config");
-        if (isImageExtension(asset.extension)) {
-          config.append(element("div", "syic-note", this.t(this.perImage.has(asset.path) ? "individual" : "inherited")), element("div", "", optionsText(this.effective(asset), this.t)));
-          const edit = this.button(this.t("individualSettings"), () => this.editImage(asset)); edit.disabled = this.working || this.manager.busy; config.append(edit);
-          if (this.perImage.has(asset.path)) { const reset = this.button(this.t("inheritGlobal"), () => { this.perImage.delete(asset.path); this.previewChanged?.(); this.renderList(); }); reset.disabled = this.working || this.manager.busy; config.append(reset); }
-        } else config.textContent = "—";
+        this.renderImageSettings(config, asset);
         row.append(config);
       }
       row.append(element("td", "syic-nowrap", asset.sizeKnown === false ? this.t("unknownSize") : formatSize(asset.size)));
@@ -217,14 +212,50 @@ export class AttachmentPanel {
       row.append(status); body.append(row);
     }
     table.append(body); this.list.append(table);
-    const selected = this.document.assets.filter(asset => asset.selected && available(asset));
+    this.updateSelection();
+    this.list.scrollTop = scroll;
+  }
+  private renderImageSettings(config: HTMLElement, asset: AssetIdentity): void {
+    config.replaceChildren();
+    if (!isImageExtension(asset.extension)) { config.textContent = "—"; return; }
+    config.append(element("div", "syic-note", this.t(this.perImage.has(asset.path) ? "individual" : "inherited")), element("div", "", optionsText(this.effective(asset), this.t)));
+    const edit = this.button(this.t("individualSettings"), () => this.editImage(asset)); edit.disabled = this.working || this.manager.busy; config.append(edit);
+    if (this.perImage.has(asset.path)) {
+      const reset = this.button(this.t("inheritGlobal"), () => { this.perImage.delete(asset.path); this.previewChanged?.(); this.refreshCompressionSettings(); });
+      reset.disabled = this.working || this.manager.busy; config.append(reset);
+    }
+  }
+  private refreshCompressionSettings(): void {
+    const assets = new Map(this.document?.assets.map(asset => [asset.path, asset]));
+    for (const row of this.list.querySelectorAll<HTMLTableRowElement>("tbody tr")) {
+      const asset = assets.get(row.dataset.assetPath!), config = row.querySelector<HTMLElement>(".syic-item-config");
+      if (asset && config) this.renderImageSettings(config, asset);
+    }
+    this.updateButtons();
+  }
+  private updateSelection(): void {
+    if (!this.document) return;
+    const visible = this.visible(), selectable = visible.filter(asset => this.available(asset));
+    const assets = new Map(visible.map(asset => [asset.path, asset]));
+    for (const row of this.list.querySelectorAll<HTMLTableRowElement>("tbody tr")) {
+      const checkbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]'), asset = assets.get(row.dataset.assetPath!);
+      if (checkbox && asset) checkbox.checked = asset.selected;
+    }
+    const selectAll = this.list.querySelector<HTMLInputElement>("thead input");
+    if (selectAll) {
+      const selectedCount = selectable.filter(asset => asset.selected).length;
+      selectAll.checked = selectable.length > 0 && selectedCount === selectable.length;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < selectable.length;
+    }
+    this.summary.replaceChildren(element("strong", "syic-doc-title", `${this.t("document")}: ${this.document.title}`));
+    if (this.document.stats) this.summary.append(element("div", "syic-total", statsText(this.document.stats, this.t)));
+    const selected = this.document.assets.filter(asset => asset.selected && this.available(asset));
     const refs = selected.flatMap(asset => asset.references), books = new Set(refs.map(ref => ref.notebook).filter(Boolean));
     const docs = new Set(refs.map(ref => ref.rootID).filter(Boolean));
     this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", this.t("impact", {
       refs: refs.length, docs: docs.size, books: books.size, closed: this.document.notebooks.filter(book => book.closed && books.has(book.id)).length,
     })));
     this.updateButtons();
-    this.list.scrollTop = scroll;
   }
   private available(asset: AssetIdentity): boolean {
     return !asset.blockers.length && (this.mode === "compress" ? isImageExtension(asset.extension) : isImageAttachment(asset.extension) && asset.newPath !== asset.path);
@@ -260,21 +291,24 @@ export class AttachmentPanel {
   }
   private async scan(): Promise<void> {
     if (this.working || this.manager.busy) return;
-    this.working = true; this.scanCancelled = false; this.document = undefined; this.perImage.clear(); this.releasePreview(); this.renderList(); this.message(this.t("scanning"));
+    const controller = new AbortController(); this.scanController = controller;
+    this.working = true; this.document = undefined; this.perImage.clear(); this.releasePreview(); this.renderList(); this.message(this.t("scanning"));
     try {
       const scanned = await scanDocument(this.kernel, this.documentId, undefined, path => {
-        if (this.scanCancelled) throw new UserError("cancelled");
         this.message(`${this.t("scanning")} ${path}`);
-      });
+      }, controller.signal);
       if (this.disposed) return;
-      if (this.scanCancelled) throw new UserError("cancelled");
+      if (controller.signal.aborted) throw new UserError("cancelled");
       this.document = scanned;
       assignRenamePaths(scanned.assets, scanned.title, this.renameOptions);
       this.document.assets.forEach(asset => { if (!this.available(asset)) asset.selected = false; });
       const shown = new Set(this.visible()); this.document.assets.forEach(asset => { if (!shown.has(asset)) asset.selected = false; });
       this.message(this.t(scanned.stats?.count === 0 ? "noAttachments" : "ready"));
     } catch (error) { this.error(error); }
-    finally { this.working = false; this.renderControls(); this.renderList(); this.updateButtons(); }
+    finally {
+      this.scanController = undefined; this.working = false;
+      if (!this.disposed) { this.renderControls(); this.renderList(); this.updateButtons(); }
+    }
   }
   private effective(asset: AssetIdentity): CompressionOptions { return cloneOptions(this.perImage.get(asset.path)?.options || this.options); }
   private editQuick(): void {
@@ -296,7 +330,7 @@ export class AttachmentPanel {
     };
     image.addEventListener("load", update); profileEditor(controls, profile, this.t, update, asset.extension.toLowerCase() === ".png");
     panel.root.append(this.button(this.t("saveSettings"), () => {
-      validateCompression(profile.options); this.perImage.set(asset.path, cloneProfile(profile)); panel.destroy(); this.renderList();
+      validateCompression(profile.options); this.perImage.set(asset.path, cloneProfile(profile)); panel.destroy(); this.refreshCompressionSettings();
     }));
   }
   private preview(asset: AssetIdentity): void {
@@ -322,7 +356,7 @@ export class AttachmentPanel {
       profile = cloneProfile(this.perImage.get(asset.path) || this.profile);
       profileEditor(controls, profile, this.t, change, asset.extension.toLowerCase() === ".png"); update();
     };
-    const change = () => { this.perImage.set(asset.path, cloneProfile(profile)); update(); this.renderList(); };
+    const change = () => { this.perImage.set(asset.path, cloneProfile(profile)); update(); this.refreshCompressionSettings(); };
     image.addEventListener("load", updateDimensions);
     profileEditor(controls, profile, this.t, change, asset.extension.toLowerCase() === ".png");
     const generate = this.button(this.t("generatePreview"), async () => {
@@ -366,11 +400,13 @@ export class AttachmentPanel {
   }
   private async refreshAfterJob(): Promise<void> {
     this.perImage.clear();
+    const controller = new AbortController(); this.scanController = controller;
+    if (this.disposed) controller.abort();
     try {
-      const scanned = await scanDocument(this.kernel, this.documentId);
+      const scanned = await scanDocument(this.kernel, this.documentId, undefined, undefined, controller.signal);
       if (!this.disposed) { this.document = scanned; assignRenamePaths(scanned.assets, scanned.title, this.renameOptions); scanned.assets.forEach(asset => { asset.selected = false; }); }
     } catch { this.document = undefined; this.message(this.t("refreshNeeded")); }
-    finally { this.working = false; if (!this.disposed) { this.renderList(); this.renderHistory(); this.updateButtons(); } }
+    finally { this.scanController = undefined; this.working = false; if (!this.disposed) { this.renderList(); this.renderHistory(); this.updateButtons(); } }
   }
   private renderHistory(): void {
     const expanded = new Set([...this.history.querySelectorAll<HTMLDetailsElement>("details[data-job-id][open]")].map(node => node.dataset.jobId));
@@ -379,18 +415,24 @@ export class AttachmentPanel {
       const details = element("details"), summary = element("summary", "", `${new Date(job.created).toLocaleString()} · ${job.documentTitle} · ${this.t(job.kind === "compress" ? "compress" : "rename")} · ${this.t(job.state)}`);
       details.dataset.jobId = job.id; details.open = expanded.has(job.id);
       details.append(summary);
-      for (const item of job.items) {
-        const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n→ ${item.newPath || "—"}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
-      }
-      if (job.items.some(item => ["completed", "applying", "recovery-required"].includes(item.state))) {
-        const restore = this.button(this.t("restore"), async () => {
-          if (this.working || this.manager.busy) return;
-          this.working = true; this.updateButtons();
-          try { await this.manager.restore(job); this.message(this.t("restored")); }
-          catch (error) { this.error(error); }
-          finally { await this.refreshAfterJob(); }
-        }); restore.disabled = this.working || this.manager.busy; details.append(restore);
-      }
+      let populated = false;
+      const populate = () => {
+        if (!details.open || populated) return;
+        populated = true;
+        for (const item of job.items) {
+          const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n→ ${item.newPath || "—"}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
+        }
+        if (job.items.some(item => ["completed", "applying", "recovery-required"].includes(item.state))) {
+          const restore = this.button(this.t("restore"), async () => {
+            if (this.working || this.manager.busy) return;
+            this.working = true; this.updateButtons();
+            try { await this.manager.restore(job); this.message(this.t("restored")); }
+            catch (error) { this.error(error); }
+            finally { await this.refreshAfterJob(); }
+          }); restore.disabled = this.working || this.manager.busy; details.append(restore);
+        }
+      };
+      details.addEventListener("toggle", populate); populate();
       this.history.append(details);
     }
     if (this.manager.journal.jobs.length > this.historyLimit) {

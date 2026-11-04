@@ -6,7 +6,7 @@ import { scanDocument } from "../src/core/assets";
 import { JobManager } from "../src/core/jobs";
 import { loadSettings } from "../src/core/settings";
 import { translator } from "../src/i18n";
-import { DocumentAssets, Kernel } from "../src/types";
+import { AssetJob, DocumentAssets, Kernel, UserError } from "../src/types";
 import { png, ref } from "./fixtures";
 import { Dialog, Protyle } from "./siyuan-host";
 import { quickSettingsDialog } from "../src/ui/quick-settings";
@@ -134,4 +134,42 @@ it("keeps standalone quick settings open and displays failed saves", async () =>
   const standalone = quickSettingsDialog(loadSettings(undefined).quick, translator({}), async () => { throw new Error("disk full"); });
   await click("Save settings", standalone.root); await vi.waitFor(() => expect(standalone.root.querySelector(".syic-error")).not.toBeNull());
   expect(standalone.closed).toBe(false); standalone.destroy();
+});
+it("preserves image rows and thumbnails when selection and compression settings change", async () => {
+  const { root } = await setup();
+  const row = root.querySelector("tbody tr")!, thumbnail = row.querySelector("img")!;
+  const checkbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  checkbox.click();
+  expect(root.querySelector("tbody tr")).toBe(row); expect(row.querySelector("img")).toBe(thumbnail);
+  expect(root.querySelector<HTMLInputElement>("thead input")!.indeterminate).toBe(true);
+  expect(root.querySelector(".syic-selected")!.textContent).toContain("1");
+  change(root, "Quality", "70");
+  expect(root.querySelector("tbody tr")).toBe(row); expect(row.querySelector("img")).toBe(thumbnail);
+  expect(row.querySelector(".syic-item-config")!.textContent).toContain("Quality 70");
+  root.querySelector<HTMLInputElement>("thead input")!.click();
+  expect(checkbox.checked).toBe(true); expect(root.querySelector("tbody tr")).toBe(row);
+});
+it("renders job item details only when history is expanded and preserves expansion on updates", async () => {
+  const { root, manager } = await setup();
+  const job: AssetJob = { schema: 1, id: "history-job", kind: "compress", documentId: doc.id, documentTitle: "History", created: new Date().toISOString(), state: "completed", options: loadSettings(undefined).global.options,
+    items: Array.from({ length: 500 }, (_, i) => ({ oldPath: `assets/${i}.png`, newPath: `assets/${i}.webp`, oldDiskPath: "", newDiskPath: "", originalSize: 45, state: "completed", before: [], plannedAfter: [] })),
+  };
+  manager.journal.jobs = [job]; manager.onChange?.();
+  expect(root.querySelectorAll(".syic-job-item")).toHaveLength(0);
+  const details = root.querySelector<HTMLDetailsElement>(".syic-history details")!;
+  details.open = true; details.dispatchEvent(new Event("toggle"));
+  expect(root.querySelectorAll(".syic-job-item")).toHaveLength(500);
+  manager.onChange?.();
+  expect(root.querySelector<HTMLDetailsElement>(".syic-history details")!.open).toBe(true);
+  expect(root.querySelectorAll(".syic-job-item")).toHaveLength(500);
+});
+it("cancels an in-flight scan when the panel closes", async () => {
+  await setup(); let signal: AbortSignal | undefined;
+  vi.mocked(scanDocument).mockImplementationOnce(async (_kernel, _id, _path, _progress, activeSignal) => {
+    signal = activeSignal;
+    return new Promise((_resolve, reject) => activeSignal!.addEventListener("abort", () => reject(new UserError("cancelled")), { once: true }));
+  });
+  await click("Scan current document");
+  expect(signal?.aborted).toBe(false); panel.dispose();
+  expect(signal?.aborted).toBe(true);
 });

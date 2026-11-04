@@ -34,6 +34,29 @@ it("detects ambiguous resource paths across closed notebooks instead of merging 
 it("does not silently skip encrypted notebooks in filesystem inventory", async () => {
   await expect(inventoryAssets(mockWorkspace(true), new Set(["assets/a.png"]))).rejects.toThrow("incompleteScan");
 });
+it("stops directory traversal when cancelled during an in-flight directory request", async () => {
+  const controller = new AbortController();
+  const kernel = mockWorkspace(), post = kernel.post.bind(kernel);
+  kernel.post = vi.fn(async (endpoint: string, body: unknown) => {
+    const result = await post(endpoint, body);
+    if (endpoint.endsWith("readDir")) controller.abort();
+    return result;
+  }) as Kernel["post"];
+  await expect(inventoryAssets(kernel, new Set(["assets/a.png"]), controller.signal)).rejects.toThrow("cancelled");
+  expect(kernel.post).toHaveBeenCalledTimes(1);
+});
+it("does not swallow cancellation as an unknown attachment size or start more requests", async () => {
+  const controller = new AbortController(); let finish!: (value: { size: number }) => void;
+  const post = vi.fn(() => new Promise<{ size: number }>(resolve => { finish = resolve; }));
+  const pending = attachmentStats({ post } as unknown as Kernel, ["assets/a.png"], controller.signal);
+  controller.abort(); finish({ size: 45 });
+  await expect(pending).rejects.toThrow("cancelled"); expect(post).toHaveBeenCalledTimes(1);
+});
+it("does not start document requests for an already cancelled scan", async () => {
+  const kernel = mockWorkspace(), controller = new AbortController(); controller.abort();
+  await expect(scanDocument(kernel, doc, undefined, undefined, controller.signal)).rejects.toThrow("cancelled");
+  expect(kernel.post).not.toHaveBeenCalled();
+});
 it("accepts null/empty asset lists and missing children without scanning workspace directories", async () => {
   for (const all of [null, []]) {
     const kernel = mockWorkspace(true), post = kernel.post.bind(kernel);

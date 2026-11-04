@@ -25,6 +25,7 @@ export default class ImageCompressionPlugin extends Plugin {
   private settingsQueue: Promise<void> = Promise.resolve();
   private unloaded = false;
   private quickBusy = false;
+  private quickController?: AbortController;
   private readonly imageMenu = (event: CustomEvent<IEventBusMap["open-menu-image"]>) => {
     const { menu, element, protyle } = event.detail;
     const image = element instanceof HTMLImageElement ? element : element.querySelector("img");
@@ -85,8 +86,8 @@ export default class ImageCompressionPlugin extends Plugin {
     if (!["desktop", "desktop-window"].includes(getFrontend()) || this.readonly()) return;
     this.addIcons('<symbol id="iconSyicCompress" viewBox="0 0 32 32"><path d="M5 4h22a2 2 0 0 1 2 2v20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm1 3v18h20V7H6zm3 15 5-6 4 4 3-3 3 5H9zm1-11a2 2 0 1 1 4 0 2 2 0 0 1-4 0z"/></symbol>');
     this.manager = new JobManager(this.api, {
-      load: async () => { const saved = await this.loadData("jobs.json"); return saved == null || saved === "" ? undefined : saved as Journal; },
-      save: async journal => { await this.saveData("jobs.json", journal); },
+      load: () => this.api.readOptionalJSON<Journal>("/data/storage/petal/sy-imgcompression/jobs.json"),
+      save: journal => this.api.putFile("/data/storage/petal/sy-imgcompression/jobs.json", new TextEncoder().encode(JSON.stringify(journal)).buffer),
     });
     try { await this.manager.initialize(); } catch (error) { this.loadError = error; }
     try { this.settings = loadSettings(await this.loadData("settings.json")); } catch { this.settings = loadSettings(undefined); }
@@ -137,13 +138,14 @@ export default class ImageCompressionPlugin extends Plugin {
     if (this.loadError) { showMessage(this.t("invalidJournal"), 7000, "error"); return; }
     if (this.readonly(protyle)) { showMessage(this.t("readonly")); return; }
     this.quickBusy = true;
+    const controller = new AbortController(); this.quickController = controller;
     const manager = this.manager, previous = manager.onProgress;
     const progress: typeof manager.onProgress = value => {
       previous?.(value); showMessage(`${this.t(value.stage)} ${value.done}/${value.total}`, 3000);
     };
     try {
       showMessage(this.t("scanning")); const options = cloneProfile(this.settings.quick).options;
-      const doc = await scanDocument(this.api, protyle.block.rootID || "", path);
+      const doc = await scanDocument(this.api, protyle.block.rootID || "", path, undefined, controller.signal);
       if (this.unloaded) return;
       manager.onProgress = progress;
       const job = await manager.run(doc, "compress", options);
@@ -151,12 +153,13 @@ export default class ImageCompressionPlugin extends Plugin {
       showMessage(`${this.t("quickCompress")} · ${this.t(item.error || item.state)}${item.state === "completed" ? ` · ${formatSize(item.originalSize)} → ${formatSize(item.resultSize!)}` : ""}`, 7000);
     } catch (error) { showMessage(this.t(error instanceof UserError ? error.code : "error"), 7000, "error"); }
     finally {
-      this.quickBusy = false; if (manager.onProgress === progress) manager.onProgress = previous;
+      this.quickBusy = false; this.quickController = undefined; if (manager.onProgress === progress) manager.onProgress = previous;
       await this.panel?.refreshExternal();
     }
   }
   onunload(): void {
     this.unloaded = true;
+    this.quickController?.abort();
     this.eventBus.off("open-menu-image", this.imageMenu); this.eventBus.off("click-editortitleicon", this.documentMenu); this.eventBus.off("open-menu-doctree", this.treeMenu);
     this.manager?.cancel(); this.dialog?.destroy(); this.quickDialog?.destroy(); this.panel?.dispose();
   }

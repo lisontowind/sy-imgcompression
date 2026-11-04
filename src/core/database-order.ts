@@ -1,5 +1,6 @@
 import { Kernel, UserError } from "../types";
 import { normalizeAssetURL } from "./paths";
+import { checkCancelled } from "./cancellation";
 
 interface RenderView {
   rows?: { id: string; cells: Cell[] }[];
@@ -10,17 +11,21 @@ interface RenderView {
 interface Cell { value?: { mAsset?: { content: string }[]; url?: { content: string } } }
 
 /** Read the kernel's sorted/paginated view, without applying our own approximation of its sorting. */
-export async function databaseViewPaths(kernel: Kernel, dom: string): Promise<string[]> {
+export async function databaseViewPaths(kernel: Kernel, dom: string, signal?: AbortSignal): Promise<string[]> {
+  checkCancelled(signal);
   const doc = new DOMParser().parseFromString(dom, "text/html"), result: string[] = [], seenViews = new Set<string>();
   const add = (raw: string) => { const path = normalizeAssetURL(raw); if (path && !result.includes(path)) result.push(path); };
   for (const element of doc.querySelectorAll('[data-type="NodeAttributeView"][data-av-id]')) {
+    checkCancelled(signal);
     const id = element.getAttribute("data-av-id")!, viewID = element.getAttribute("data-av-view-id") || undefined;
     const key = `${id}:${viewID || ""}`;
     if (seenViews.has(key)) continue; seenViews.add(key);
     if (!/^\d{14}-[a-z0-9]{7}$/.test(id)) throw new UserError("unavailableDatabase", id);
     const seenRows = new Set<string>();
     for (let page = 1; page <= 10000; page++) {
-      const data = await kernel.post<{ view: RenderView }>("/api/av/renderAttributeView", { id, ...(viewID ? { viewID } : {}), page, pageSize: 200 });
+      checkCancelled(signal);
+      const data = await kernel.post<{ view: RenderView }>("/api/av/renderAttributeView", { id, ...(viewID ? { viewID } : {}), page, pageSize: 200 }, signal);
+      checkCancelled(signal);
       if (!data?.view) throw new UserError("unavailableDatabase", id);
       let added = 0;
       const visit = (view: RenderView) => {

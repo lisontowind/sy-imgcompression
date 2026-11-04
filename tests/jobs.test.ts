@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { JobManager, assignRenamePaths, DEFAULT_COMPRESSION, DEFAULT_RENAME, JournalStore } from "../src/core/jobs";
 import { AssetIdentity, AssetReference, CompressionOptions, CompressionResult, DocumentAssets, Journal, Kernel } from "../src/types";
 import { expectedAfter } from "../src/core/references";
 import { png, ref, report } from "./fixtures";
+import { MAX_BYTES } from "../src/compression/image-info";
+
+afterEach(() => vi.unstubAllGlobals());
 
 class FakeKernel implements Kernel {
   files = new Map<string, ArrayBuffer>([["/data/assets/a.png", png()]]);
@@ -46,6 +49,81 @@ function setup() {
   return { kernel, manager, store, document, output, compressor, getSaved: () => saved };
 }
 describe("durable attachment jobs", () => {
+  it("retains another window's jobs when managers initialized from the same empty store", async () => {
+    const { kernel, manager, store, document, compressor, getSaved } = setup();
+    const other = new JobManager(kernel, store, compressor);
+    await manager.initialize(); await other.initialize();
+    const first = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    const asset = { ...structuredClone(document.assets[0]), path: "assets/b.png", name: "b.png", diskPath: "/data/assets/b.png", references: [ref("b", "assets/b.png")] };
+    kernel.files.set(asset.diskPath, png()); kernel.refs.set(asset.path, asset.references);
+    const second = await other.run({ ...document, assets: [asset] }, "compress", DEFAULT_COMPRESSION);
+    expect(getSaved()!.jobs.map(job => job.id)).toEqual([second.id, first.id]);
+    // Restoring from an older window must keep the newer window's record too.
+    await manager.restore(first);
+    expect(getSaved()!.jobs.map(job => job.state)).toEqual(["completed", "restored"]);
+    expect(kernel.refs.get("assets/a.png")).toHaveLength(2);
+  });
+  it("uses the latest persisted state when another window already restored a job", async () => {
+    const { kernel, manager, store, document, compressor, getSaved } = setup();
+    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    const other = new JobManager(kernel, store, compressor); await other.initialize();
+    await other.restore(other.journal.jobs[0]);
+    const writes = kernel.mutations;
+    await manager.restore(job);
+    expect(kernel.mutations).toBe(writes);
+    expect(getSaved()!.jobs[0].state).toBe("restored"); expect(job.state).toBe("restored");
+  });
+  it("does not mark an active window's task interrupted during initialization", async () => {
+    const { kernel, manager, document, getSaved, compressor } = setup();
+    await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    const saved = getSaved()!; saved.jobs[0].state = "running"; saved.jobs[0].items[0].state = "applying";
+    const save = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { locks: { request: async (_name: string, _options: unknown, action: (lock: unknown) => Promise<unknown>) => action(null) } });
+    const other = new JobManager(kernel, { load: async () => saved, save }, compressor);
+    await other.initialize();
+    expect(other.journal.jobs[0].state).toBe("running"); expect(save).not.toHaveBeenCalled();
+    await expect(other.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("busy");
+  });
+  it("reloads the journal only after acquiring the cross-window mutation lock", async () => {
+    const { kernel, document, compressor } = setup(); let locked = false, saved: Journal | undefined;
+    vi.stubGlobal("navigator", { locks: { request: async (_name: string, _options: unknown, action: (lock: unknown) => Promise<unknown>) => {
+      locked = true; try { return await action({}); } finally { locked = false; }
+    } } });
+    const load = vi.fn(async () => { expect(locked).toBe(true); return saved; });
+    const manager = new JobManager(kernel, { load, save: async value => { expect(locked).toBe(true); saved = structuredClone(value); } }, compressor);
+    await manager.initialize(); await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+  it("does not start compression when preview was cancelled during file reading", async () => {
+    const { kernel, manager, document, compressor } = setup(); let finish!: (bytes: ArrayBuffer) => void;
+    kernel.readFile = () => new Promise(resolve => { finish = resolve; });
+    const preview = manager.preview(document.assets[0], DEFAULT_COMPRESSION);
+    manager.cancel(); finish(png());
+    await expect(preview).rejects.toThrow("cancelled"); expect(compressor.compress).not.toHaveBeenCalled(); expect(manager.busy).toBe(false);
+  });
+  it("does not start compression when preview was cancelled during hashing", async () => {
+    const { manager, document, compressor } = setup(); let finish!: (bytes: ArrayBuffer) => void;
+    const hash = vi.fn(() => new Promise<ArrayBuffer>(resolve => { finish = resolve; }));
+    vi.stubGlobal("crypto", { subtle: { digest: hash } });
+    const preview = manager.preview(document.assets[0], DEFAULT_COMPRESSION);
+    await vi.waitFor(() => expect(hash).toHaveBeenCalledOnce()); manager.cancel(); finish(new ArrayBuffer(32));
+    await expect(preview).rejects.toThrow("cancelled"); expect(compressor.compress).not.toHaveBeenCalled();
+  });
+  it("rejects oversized images before reading them in previews and batch jobs", async () => {
+    const { kernel, manager, document, compressor } = setup(); document.assets[0].size = MAX_BYTES + 1;
+    const read = vi.spyOn(kernel, "readFile");
+    await expect(manager.preview(document.assets[0], DEFAULT_COMPRESSION)).rejects.toThrow("imageTooLarge");
+    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    expect(job.items[0]).toMatchObject({ state: "skipped", error: "imageTooLarge" });
+    expect(read).not.toHaveBeenCalled(); expect(compressor.compress).not.toHaveBeenCalled(); expect(kernel.mutations).toBe(0);
+  });
+  it("refuses writes if refreshing the durable journal fails", async () => {
+    const { kernel, document, compressor } = setup();
+    const save = vi.fn(async () => {});
+    const manager = new JobManager(kernel, { load: async () => { throw new Error("journal unreadable"); }, save }, compressor);
+    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("journal unreadable");
+    expect(save).not.toHaveBeenCalled(); expect(kernel.mutations).toBe(0);
+  });
   it("compresses a shared attachment once and migrates all references", async () => {
     const { kernel, manager, document, getSaved } = setup();
     const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
