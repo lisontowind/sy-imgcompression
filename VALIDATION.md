@@ -1,6 +1,6 @@
 # 验收记录 / Validation
 
-## Issue #1 引用查询回归 — 2026-11-07（Asia/Shanghai）
+## 0.1.4 / Issue #1 引用查询回归 — 2026-11-07（Asia/Shanghai）
 
 - `npm test`：10 个测试文件、97 项测试通过；`npm run build`（含类型检查）通过。
 - `npm run test:integration`：使用本机 **SiYuan Kernel 3.8.10-alpha.6** 与无头 Microsoft Edge，

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 — 2026-11-07
 
 - 修复 [#1](https://github.com/lisontowind/sy-imgcompression/issues/1)：菜单统计、附件列表、刷新和压缩预览不再触发全工作空间引用查询。
 - 引用详情按附件点击加载，结果在当前扫描会话内复用；关闭查询弹窗会取消请求，重新扫描会清除结果。
