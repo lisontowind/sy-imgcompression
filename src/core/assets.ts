@@ -1,8 +1,7 @@
 import { readJSON } from "../api";
 import { AssetIdentity, AttachmentStats, DirectoryEntry, DocumentAssets, Kernel, Notebook, UserError } from "../types";
 import { basename, extensionOf, normalizeAssetURL } from "./paths";
-import { findReferences } from "./references";
-import { databaseViewPaths } from "./database-order";
+import { databaseSourcePaths, databaseViewPaths } from "./database-order";
 import { documentSourceInventory, SourceNode } from "./document-source";
 import { checkCancelled } from "./cancellation";
 
@@ -62,27 +61,17 @@ export function orderedPaths(dom: string, titleImage: string, all: string[]): st
 export async function documentInventory(kernel: Kernel, id: string, signal?: AbortSignal) {
   checkCancelled(signal);
   if (!nodeId.test(id)) throw new UserError("openDocument");
-  const [{ notebooks }, info, all] = await Promise.all([
+  const [{ notebooks }, info] = await Promise.all([
     kernel.post<{ notebooks: Notebook[] }>("/api/notebook/lsNotebooks", {}, signal),
     kernel.post<{ box: string; path: string }>("/api/block/getBlockInfo", { id }, signal),
-    kernel.post<string[] | null>("/api/asset/getDocAssets", { id, retainQueryStr: true }, signal),
   ]);
   checkCancelled(signal);
-  if (!nodeId.test(info?.box) || !info.path?.startsWith("/") || info.path.split("/").includes("..") || (all !== null && !Array.isArray(all))) throw new UserError("readFailed", id);
+  if (!nodeId.test(info?.box) || !info.path?.startsWith("/") || info.path.split("/").includes("..")) throw new UserError("readFailed", id);
   const source = documentSourceInventory(await readJSON<SourceNode>(kernel, `/data/${info.box}${info.path}`, signal), id);
   const dbPaths = await databaseViewPaths(kernel, source.databaseDOM, signal);
   const paths = [...source.paths];
-  for (const raw of dbPaths) { const path = normalizeAssetURL(raw); if (path && !paths.includes(path)) paths.push(path); }
-  // Supplemental kernel entries can be stale after relinking. Verify ownership.
-  const seen = new Set(paths);
-  for (const raw of all || []) {
-    checkCancelled(signal);
-    const path = normalizeAssetURL(raw);
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
-    const report = await findReferences(kernel, path, signal);
-    if (report.references.some(ref => ref.rootID === id || source.databaseIds.has(ref.avID))) paths.push(path);
-  }
+  const supplemental = await databaseSourcePaths(kernel, source.databaseIds, signal);
+  for (const path of [...dbPaths, ...supplemental]) if (!paths.includes(path)) paths.push(path);
   return { id, title: source.title, notebooks, paths };
 }
 
@@ -122,18 +111,9 @@ export async function scanDocument(kernel: Kernel, id: string, onlyPath?: string
     progress?.(path);
     const candidates = inventory.get(path) || [];
     const asset: AssetIdentity = { path, diskPath: candidates[0] || "", name: basename(path), extension: extensionOf(path),
-      size: sizes.get(path) ?? 0, sizeKnown: sizes.has(path), references: [], blockers: [], selected: true, order: assets.length };
+      size: sizes.get(path) ?? 0, sizeKnown: sizes.has(path), references: [], referencesLoaded: false, blockers: [], selected: true, order: assets.length };
     if (candidates.length !== 1) asset.blockers.push(candidates.length ? "ambiguousAsset" : "missingLocalAsset");
-    try {
-      const report = await findReferences(kernel, path, signal); asset.references = report.references;
-      if (!asset.references.length) asset.blockers.push("noReferences");
-      if (!asset.sizeKnown) throw new UserError("readFailed", path);
-    } catch (error) {
-      checkCancelled(signal);
-      // A failure to inspect the workspace invalidates the whole preview, not just one image.
-      if (error instanceof UserError && ["incompleteScan", "unavailableDatabase", "unsupportedKernel"].includes(error.code)) throw error;
-      asset.blockers.push(error instanceof UserError ? error.code : String(error));
-    }
+    if (!asset.sizeKnown) asset.blockers.push("readFailed");
     asset.selected = !asset.blockers.length; assets.push(asset);
   }
   return { id, title, notebooks, assets, stats };

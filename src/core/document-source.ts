@@ -20,6 +20,9 @@ export function documentSourceInventory(root: SourceNode, id: string): SourceInv
     if (!node || typeof node.Type !== "string") throw new UserError("readFailed", id);
     if (node.Type === "NodeLinkDest" && node.Data) add(node.Data);
     if (node.Type === "NodeTextMark" && node.TextMarkType?.split(" ").includes("a") && node.TextMarkAHref) add(node.TextMarkAHref);
+    const annotation = node.Type === "NodeFileAnnotationRefID" ? node.Data :
+      node.Type === "NodeTextMark" && node.TextMarkType?.split(" ").includes("file-annotation-ref") ? node.TextMarkFileAnnotationRefID : undefined;
+    if (annotation) add(annotation.replace(/\/\d{14}-[a-z0-9]{7}(?=[?#]|$)/, ""));
     if (node.Type === "NodeAttributeView") {
       const avID = node.AttributeViewID || node.Properties?.["av-id"] || node.Data;
       if (!avID || !/^\d{14}-[a-z0-9]{7}$/.test(avID)) throw new UserError("unavailableDatabase", avID || node.ID || id);
@@ -28,8 +31,8 @@ export function documentSourceInventory(root: SourceNode, id: string): SourceInv
     }
     if (["NodeHTMLBlock", "NodeInlineHTML", "NodeIFrame", "NodeAudio", "NodeVideo", "NodeWidget"].includes(node.Type) && node.Data) {
       const html = new DOMParser().parseFromString(node.Data, "text/html");
-      for (const element of html.querySelectorAll("[src], [href], [data-src], [poster], [data], [style]")) {
-        for (const key of ["src", "href", "data-src", "poster", "data"]) { const value = element.getAttribute(key); if (value) add(value); }
+      for (const element of html.querySelectorAll("*")) {
+        for (const attribute of element.attributes) add(attribute.value);
         css(element.getAttribute("style") || "");
       }
     }
@@ -41,6 +44,6 @@ export function documentSourceInventory(root: SourceNode, id: string): SourceInv
     }
     node.Children?.forEach(visit);
   };
-  root.Children?.forEach(visit);
+  visit(root);
   return { title: root.Properties?.title || "", paths, databaseDOM: views.join(""), databaseIds };
 }

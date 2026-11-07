@@ -11,7 +11,7 @@
   "referenceUnavailable": "This reference's document is closed or unavailable. Notebook state has not changed.", "selectReference": "Select a reference to read its document here.",
   "title": "Image Compression", "compress": "Image compression", "rename": "Image renaming",
   "compressDoc": "Compress images in this document", "compressImage": "Open compression panel", "renameDoc": "Rename images in this document",
-  "scan": "Scan current document", "scanning": "Scanning workspace references…", "empty": "No matching local attachments.",
+  "scan": "Scan current document", "scanning": "Reading document attachments…", "scanningReferences": "Scanning workspace references…", "referencesDeferred": "Workspace references are checked when you open reference details or apply changes.", "empty": "No matching local attachments.",
   "document": "Document", "preset": "Preset", "clear": "Clarity", "balanced": "Balanced", "small": "Smallest", "custom": "Custom",
   "quality": "Quality", "format": "Output format", "originalFormat": "Keep original format", "maxWidth": "Max width (0 = unchanged)", "maxHeight": "Max height (0 = unchanged)",
   "byteLimit": "Document prefix · length budget", "byteHint": "Default 24: 16 English characters or 8 common Chinese characters. Mixed text shares the budget (English 1.5, Chinese 3). Characters stay intact and UTF-8 bytes also stay within the budget. Sequence, ID and extension are separate.",

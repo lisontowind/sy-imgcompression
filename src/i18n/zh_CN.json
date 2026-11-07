@@ -11,7 +11,7 @@
   "referenceUnavailable": "此引用的文档已关闭或暂时无法读取。未改变笔记本状态。", "selectReference": "点击左侧引用位置，在此阅读对应文档。",
   "title": "图片压缩", "compress": "图片压缩", "rename": "图片重命名",
   "compressDoc": "压缩当前文档图片", "compressImage": "打开压缩面板", "renameDoc": "重命名当前文档图片",
-  "scan": "扫描当前文档", "scanning": "正在扫描工作空间引用…", "empty": "没有符合当前筛选条件的附件。",
+  "scan": "扫描当前文档", "scanning": "正在读取文档附件…", "scanningReferences": "正在扫描工作空间引用…", "referencesDeferred": "查看引用详情或应用修改时才检查工作空间引用。", "empty": "没有符合当前筛选条件的附件。",
   "document": "文档", "preset": "压缩预设", "clear": "清晰优先", "balanced": "均衡", "small": "体积优先", "custom": "自定义",
   "quality": "质量", "format": "输出格式", "originalFormat": "保持原格式", "maxWidth": "最大宽度（0 为不限制）", "maxHeight": "最大高度（0 为不限制）",
   "byteLimit": "文档名前缀 · 长度预算", "byteHint": "默认预算 24：最多 16 个英文字符或 8 个常见汉字，混合按比例折算（英文计 1.5、汉字计 3）。保留完整字符，UTF-8 字节数也不超过预算。序号、唯一 ID 和扩展名另计。",

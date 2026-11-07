@@ -7,7 +7,7 @@ import { JobManager } from "../src/core/jobs";
 import { loadSettings } from "../src/core/settings";
 import { translator } from "../src/i18n";
 import { AssetJob, DocumentAssets, Kernel, UserError } from "../src/types";
-import { png, ref } from "./fixtures";
+import { png, ref, report } from "./fixtures";
 import { Dialog, Protyle } from "./siyuan-host";
 import { quickSettingsDialog } from "../src/ui/quick-settings";
 
@@ -30,7 +30,7 @@ async function setup() {
   const manager = new JobManager(kernel, { load: async () => undefined, save: async () => {} }, compressor), settings = loadSettings(undefined);
   const save = vi.fn(async (key: "quick" | "global", profile) => { settings[key] = profile; });
   panel = new AttachmentPanel(root, kernel, manager, translator({}), doc.id, "compress", undefined, { settings, save, app: {} as never });
-  await panel.start(); return { root, manager, compressor, save, settings };
+  await panel.start(); return { root, manager, compressor, save, settings, kernel };
 }
 async function click(label: string, root: ParentNode = document) {
   const node = [...root.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label || button.getAttribute("aria-label") === label)!;
@@ -75,6 +75,42 @@ it("embeds reference reading as read-only and disposes the reader", async () => 
   const child = document.querySelector(".syic-child")!; child.querySelector<HTMLButtonElement>(".syic-ref button")!.click();
   await vi.waitFor(() => expect(Protyle.instances).toHaveLength(1)); expect(Protyle.instances[0].disabled).toBe(true);
   Dialog.instances.at(-1)!.destroy(); expect(Protyle.instances[0].destroyed).toBe(true);
+});
+it("loads reference details on demand and reuses them only within the current scan", async () => {
+  const deferred = structuredClone(doc); deferred.assets.forEach(asset => { asset.references = []; asset.referencesLoaded = false; });
+  vi.mocked(scanDocument).mockResolvedValue(deferred);
+  const { root, kernel } = await setup();
+  expect(kernel.post).not.toHaveBeenCalled();
+  expect(root.querySelector(".syic-impact")!.textContent).toContain("when you open reference details");
+  vi.mocked(kernel.post).mockResolvedValue(report([ref()]));
+  await click("Reference details", root);
+  await vi.waitFor(() => expect(document.querySelectorAll(".syic-ref")).toHaveLength(1));
+  const queries = () => vi.mocked(kernel.post).mock.calls.filter(([endpoint]) => endpoint.endsWith("findAssetReferences"));
+  expect(queries()).toHaveLength(1);
+  expect(queries()[0]).toEqual(["/api/asset/findAssetReferences", { path: "assets/a.png" }, expect.objectContaining({ aborted: false })]);
+  Dialog.instances.at(-1)!.destroy(); await click("Reference details (1)", root);
+  expect(queries()).toHaveLength(1);
+  Dialog.instances.at(-1)!.destroy();
+  const fresh = structuredClone(doc); fresh.assets.forEach(asset => { asset.references = []; asset.referencesLoaded = false; });
+  vi.mocked(scanDocument).mockResolvedValueOnce(fresh); await click("Scan current document", root);
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".syic-actions button")!.disabled).toBe(false));
+  await click("Reference details", root);
+  await vi.waitFor(() => expect(queries()).toHaveLength(2));
+});
+it("aborts an on-demand reference query when its dialog closes and allows retry", async () => {
+  const deferred = structuredClone(doc); deferred.assets[0].referencesLoaded = false; deferred.assets[0].references = [];
+  vi.mocked(scanDocument).mockResolvedValue(deferred);
+  const { root, kernel } = await setup(); let signal: AbortSignal | undefined;
+  vi.mocked(kernel.post).mockImplementationOnce(async (_endpoint, _body, activeSignal) => {
+    signal = activeSignal;
+    return new Promise((_resolve, reject) => activeSignal!.addEventListener("abort", () => reject(new UserError("cancelled")), { once: true }));
+  });
+  await click("Reference details", root); expect(signal?.aborted).toBe(false);
+  Dialog.instances.at(-1)!.destroy();
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".syic-actions button")!.disabled).toBe(false));
+  expect(signal?.aborted).toBe(true); expect(deferred.assets[0].referencesLoaded).toBe(false);
+  vi.mocked(kernel.post).mockResolvedValue(report([ref()])); await click("Reference details", root);
+  await vi.waitFor(() => expect(document.querySelectorAll(".syic-ref")).toHaveLength(1));
 });
 it("does not invalidate a running preview when the original finishes loading", async () => {
   const { root, compressor } = await setup();

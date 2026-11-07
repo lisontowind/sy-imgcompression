@@ -24,6 +24,11 @@ can be opened directly from the image context menu or the panel, without loading
 attachment list. Independent quick settings and global settings
 are persisted in `settings.json`; quick compression also uses the durable job journal.
 
+Opening menus, listing or refreshing attachments, and generating compression previews
+do not query workspace references. Reference details load on demand for one attachment
+and are reused until the next document scan. Applying changes and recovery still verify
+fresh workspace references; compression results with no savings skip these lookups.
+
 Compression supports static JPEG/PNG/WebP, local WebP output by default, presets
 90/82/70 (default 82), an explicit Custom preset, and optional downscaling. Choose
 original dimensions, 75/50/25%, a custom percentage (1–100), or an advanced width,

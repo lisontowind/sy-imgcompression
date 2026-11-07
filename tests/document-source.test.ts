@@ -15,3 +15,10 @@ it("reads current source order, HTML-escaped title images and folded content", (
 it("does not follow block references or interpret ordinary text as a resource", () => {
   expect(documentSourceInventory({ ID: id, Type: "NodeDocument", Children: [{ Type: "NodeText", Data: "assets/not-a-link.png" }, { Type: "NodeBlockRef", Data: "another-doc" }] }, id).paths).toEqual([]);
 });
+it("includes annotation-only PDFs, document attributes and HTML attachment attributes", () => {
+  expect(documentSourceInventory({ ID: id, Type: "NodeDocument", Properties: { "custom-data-assets": "assets/root.png" }, Children: [
+    { Type: "NodeFileAnnotationRefID", Data: "assets/first.pdf/20261016000001-abcdefg" },
+    { Type: "NodeTextMark", TextMarkType: "file-annotation-ref", TextMarkFileAnnotationRefID: "assets/second.pdf/20261016000002-abcdefg" },
+    { Type: "NodeHTMLBlock", Data: '<div custom-asset="assets/html.png"></div>' },
+  ] }, id).paths).toEqual(["assets/root.png", "assets/first.pdf", "assets/second.pdf", "assets/html.png"]);
+});

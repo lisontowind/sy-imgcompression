@@ -100,9 +100,6 @@ export class JobManager {
             if (kind === "rename" && (await fileExists(this.kernel, "/data/" + item.newPath) || job.items.some(other => other !== item && other.newPath.toLowerCase() === item.newPath.toLowerCase()))) {
               item.state = "skipped"; item.error = "filenameConflict"; await this.save(); done++; continue;
             }
-            const current = await findReferences(this.kernel, asset.path);
-            if (referenceFingerprint(current.references) !== referenceFingerprint(asset.references)) throw new UserError("sourceChanged", asset.path);
-            item.before = current.references;
             const source = await this.readSource(asset, kind === "compress");
             item.sourceDigest = await digest(source);
             if (asset.previewDigest && item.sourceDigest !== asset.previewDigest) throw new UserError("sourceChanged", asset.path);
@@ -119,6 +116,13 @@ export class JobManager {
             } else item.resultSize = source.byteLength;
             validateFilename(basename(item.newPath));
             item.newDiskPath = "/data/" + item.newPath;
+            // Browsing and previews defer workspace lookups. Establish a fresh
+            // baseline only for an attachment that will actually be changed.
+            const current = await findReferences(this.kernel, asset.path);
+            if (!current.references.length) throw new UserError("noReferences", asset.path);
+            if (asset.referencesLoaded !== false && referenceFingerprint(current.references) !== referenceFingerprint(asset.references)) throw new UserError("sourceChanged", asset.path);
+            item.before = current.references;
+            this.checkCancelled();
             // Check again immediately before writing; never overwrite an existing file.
             if (await fileExists(this.kernel, item.newDiskPath)) throw new UserError("filenameConflict", item.newPath);
             if (item.oldPath === item.newPath) throw new UserError("filenameConflict", item.newPath);
