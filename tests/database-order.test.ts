@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
-import { databaseViewPaths } from "../src/core/database-order";
+import { databaseSourcePaths, databaseViewPaths } from "../src/core/database-order";
 import { Kernel } from "../src/types";
 
 it("stops database pagination immediately after cancellation", async () => {
@@ -27,4 +27,23 @@ it("walks grouped gallery cards without treating missing definitions as empty", 
   const block = '<div data-type="NodeAttributeView" data-av-id="20261016000000-abcdefg"></div>';
   expect(await databaseViewPaths(kernel, block)).toEqual(["assets/a.webp"]);
   await expect(databaseViewPaths({ post: async () => null } as unknown as Kernel, block)).rejects.toThrow("unavailableDatabase");
+});
+it("reads hidden database assets, nested values and rich text without workspace queries", async () => {
+  const id = "20261016000000-abcdefg";
+  const readFile = vi.fn(async () => new TextEncoder().encode(JSON.stringify({ id, keyValues: [{ values: [
+    { mAsset: [{ content: "assets/hidden.png" }] },
+    { rollup: { contents: [{ url: { content: "assets/hidden.pdf#page=2" } }] } },
+    { text: { content: "assets/ordinary-text.png", rich: { spec: 1, format: "kramdown", content: "[link](assets/rich.png)" } } },
+  ] }] })).buffer);
+  const post = vi.fn(async () => ({ html: '<a href="assets/rich.png">link</a>' }));
+  expect(await databaseSourcePaths({ readFile, post } as unknown as Kernel, new Set([id]))).toEqual(["assets/hidden.png", "assets/hidden.pdf", "assets/rich.png"]);
+  expect(readFile).toHaveBeenCalledWith(`/data/storage/av/${id}.json`, undefined);
+  expect(post).toHaveBeenCalledExactlyOnceWith("/api/lute/md2html", { markdown: "[link](assets/rich.png)" }, undefined);
+});
+it("rejects missing database sources and preserves cancellation", async () => {
+  const id = "20261016000000-abcdefg", controller = new AbortController();
+  const kernel = { readFile: vi.fn(async () => { throw new Error("unreadable"); }) } as unknown as Kernel;
+  await expect(databaseSourcePaths(kernel, new Set([id]))).rejects.toThrow("unavailableDatabase");
+  controller.abort();
+  await expect(databaseSourcePaths(kernel, new Set([id]), controller.signal)).rejects.toThrow("cancelled");
 });

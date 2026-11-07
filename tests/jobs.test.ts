@@ -167,7 +167,31 @@ describe("durable attachment jobs", () => {
   });
   it("skips a result without savings without uploading anything", async () => {
     const { kernel, manager, document, output } = setup(); output.bytes = new ArrayBuffer(100);
+    const post = vi.spyOn(kernel, "post");
     const job = await manager.run(document, "compress", DEFAULT_COMPRESSION); expect(job.items[0].state).toBe("skipped"); expect(kernel.mutations).toBe(0);
+    expect(post.mock.calls.some(([endpoint]) => /findAssetReferences|relinkAsset/.test(endpoint))).toBe(false);
+  });
+  it("establishes a fresh complete baseline for deferred references before writing", async () => {
+    const { kernel, manager, document } = setup();
+    Object.assign(document.assets[0], { referencesLoaded: false, references: [] });
+    kernel.refs.get("assets/a.png")!.push(ref("added-before-apply"));
+    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    expect(job.items[0].before).toHaveLength(3); expect(job.items[0].after).toHaveLength(3);
+    expect(job.items[0].state).toBe("completed");
+  });
+  it("blocks deferred jobs on incomplete workspace reports before writing attachment files", async () => {
+    const { kernel, manager, document } = setup();
+    Object.assign(document.assets[0], { referencesLoaded: false, references: [] });
+    const post = kernel.post.bind(kernel);
+    kernel.post = async (endpoint, body) => endpoint.endsWith("findAssetReferences") ? { ...report(), skippedNotebooks: ["encrypted"] } as never : post(endpoint, body);
+    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("incompleteScan");
+    expect(kernel.mutations).toBe(0);
+  });
+  it("does not write an attachment whose deferred references have disappeared", async () => {
+    const { kernel, manager, document } = setup();
+    Object.assign(document.assets[0], { referencesLoaded: false, references: [] }); kernel.refs.clear();
+    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("noReferences");
+    expect(kernel.mutations).toBe(0);
   });
   it("uses image names and preserves the original bytes", async () => {
     const { kernel, manager, document } = setup(); const job = await manager.run(document, "rename", DEFAULT_RENAME);

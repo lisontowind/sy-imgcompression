@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.4 — 2026-11-07
+
+- 修复 [#1](https://github.com/lisontowind/sy-imgcompression/issues/1)：菜单统计、附件列表、刷新和压缩预览不再触发全工作空间引用查询。
+- 引用详情按附件点击加载，结果在当前扫描会话内复用；关闭查询弹窗会取消请求，重新扫描会清除结果。
+- 当前文档及其数据库源码提供补充附件，保留标注 PDF、隐藏数据库值和富文本链接统计，避免依赖陈旧附件缓存和逐路径全库核验。
+- 无压缩收益时跳过引用查询；实际修改及恢复仍使用新的完整引用报告、演练、写入核验和恢复日志。
+
+Defer workspace reference lookups until reference details are requested or an
+attachment will actually change. Keep document statistics local to its source and
+databases, skip reference queries for compression without savings, and retain fresh
+preflight, migration verification and recovery checks.
+
 ## 0.1.3 — 2026-11-04
 
 - 修复多窗口任务日志覆盖：执行与恢复前在跨窗口锁内刷新日志，恢复操作使用最新持久状态。

@@ -88,6 +88,8 @@ try {
   browser = await chromium.launch({ executablePath: edgePath, headless: true, args: ["--no-first-run"] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
+  const referenceRequests = [];
+  page.on("request", req => { if (/\/api\/asset\/(findAssetReferences|relinkAsset)$/.test(req.url())) referenceRequests.push(req.url()); });
   const external = [];
   page.on("request", req => { if (!req.url().startsWith(testOrigin) && !req.url().startsWith("blob:")) external.push(req.url()); });
   await page.goto(testOrigin);
@@ -137,7 +139,8 @@ try {
   await check("built plugin opens compression first and scans one shared file", async () => {
     assert.equal(await page.getByRole("tab", { name: "Image compression", exact: true }).getAttribute("aria-selected"), "true");
     assert.equal(await page.locator("tbody tr").count(), 1);
-    assert((await page.locator(".syic-summary").textContent()).includes("1 closed"));
+    assert((await page.locator(".syic-summary").textContent()).includes("Workspace references are checked when"));
+    assert.equal(referenceRequests.length, 0, "opening the panel must not scan workspace references");
     assert((await page.locator(".syic-total").textContent()).includes("Document attachment total:"));
   });
   await check("custom presets, thumbnail viewing and reference dialogs preserve the main panel", async () => {
@@ -150,10 +153,13 @@ try {
     await page.locator("tbody tr").first().getByRole("button", { name: /^Reference details/ }).click();
     const openReference = page.locator(".syic-ref button").filter({ hasText: "Plugin fixture A" }).first();
     await openReference.click(); await page.locator('.syic-reader[data-readonly="true"] img').first().waitFor();
+    assert.equal(referenceRequests.length, 1, "only the explicitly opened attachment should be queried");
+    assert((await page.locator(".syic-summary").textContent()).includes("1 closed"));
     assert.equal(await page.locator(".sy-imgcompression-root tbody tr").count(), 1);
     await page.evaluate(() => window.__dialogs.at(-1).destroy());
   });
   await check("document and image menu hooks expose asynchronously loaded metadata", async () => {
+    const before = referenceRequests.length;
     const info = await page.evaluate(async ({ id, assetPath }) => {
       const protyle = { block: { rootID: id }, disabled: false }, labels = [];
       const menu = { addItem(item) { const node = document.createElement('div'); node.className='test-menu'; const label = document.createElement('span'); label.className='b3-menu__label'; label.textContent=item.label;node.append(label);document.body.append(node);item.bind?.(node);labels.push({item,node}); } };
@@ -166,8 +172,10 @@ try {
     }, { id: activeId, assetPath });
     assert.equal(info.breadcrumb, false); assert.equal(info.labels.filter(label => label.includes("Document attachment total:")).length, 2);
     assert(info.labels.some(label => label.includes("512 × 384"))); assert(info.labels.includes("Quick compress"));
+    assert.equal(referenceRequests.length, before, "menu metadata must not scan workspace references");
   });
   await check("offline WASM worker compresses WebP with alpha", async () => {
+    const before = referenceRequests.length;
     await page.getByRole("button", { name: "Preview", exact: true }).click();
     assert.equal(await page.locator(".syic-preview img").count(), 0);
     await page.getByRole("button", { name: "Generate compression preview", exact: true }).click();
@@ -183,6 +191,30 @@ try {
     assert.deepEqual(images[0], images[1]); assert((await page.locator(".syic-status").textContent()).includes("Image file reduction:"));
     await page.screenshot({ path: path.join(testRoot, "compression-preview.png"), fullPage: true });
     await page.evaluate(() => window.__dialogs.at(-1).destroy());
+    assert.equal(referenceRequests.length, before, "compression preview must not scan workspace references");
+  });
+  await check("document scans include database rich-text assets without workspace reference queries", async () => {
+    const before = referenceRequests.length;
+    const avPath = `/data/storage/av/${emptyAV}.json`;
+    const original = fs.readFileSync(path.join(workspace, avPath.slice(1)));
+    const hiddenPath = "assets/database-only-20261016000108-rich001.png";
+    await put("/data/" + hiddenPath, new Uint8Array(source));
+    const database = JSON.parse(original);
+    database.keyValues.push({ key: { id: "20261016000109-richkey", name: "Hidden rich text", type: "text" }, values: [
+      { id: "20261016000110-richval", keyID: "20261016000109-richkey", type: "text", text: { content: "Hidden link", rich: { spec: 1, format: "kramdown", content: `[Hidden link](${hiddenPath})` } } },
+    ] });
+    try {
+      await put(avPath, new TextEncoder().encode(JSON.stringify(database)));
+      await page.getByRole("button", { name: "Scan current document", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready", { timeout: 30000 });
+      assert.equal(await page.locator(`tbody tr[data-asset-path="${hiddenPath}"]`).count(), 1);
+      assert.equal(referenceRequests.length, before);
+    } finally {
+      await put(avPath, original);
+      await page.getByRole("button", { name: "Scan current document", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready", { timeout: 30000 });
+    }
+    assert.equal(await page.locator("tbody tr").count(), 1);
   });
   await check("PNG lossless, downscaling and EXIF-oriented JPEG encoding", async () => {
     const checks = await page.evaluate(async source => {
@@ -211,10 +243,13 @@ try {
     assert.deepEqual(checks.jpeg, [40, 64]); assert.equal(checks.jpegMime, "image/jpeg");
   });
   await check("compression migrates all references and preserves closed notebook state", async () => {
+    const before = referenceRequests.length;
     await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), { timeout: 30000 });
     const job = (await readJournal()).jobs[0];
     assert.equal(job.items[0].state, "completed");
+    await page.waitForFunction(() => !document.querySelector(".syic-actions button")?.disabled);
+    assert.equal(referenceRequests.length - before, 5, "post-job refresh must not repeat workspace reference scans");
     const old = await api("/api/asset/findAssetReferences", { path: assetPath }); assert(!old.references.some(ref => !["annotation-file", "ocr"].includes(ref.type)));
     const after = await api("/api/asset/findAssetReferences", { path: job.items[0].newPath }); assert(after.references.some(ref => ref.rootID === closedId));
     const database = JSON.parse(fs.readFileSync(path.join(workspace, "data/storage/av", avID + ".json"), "utf8"));

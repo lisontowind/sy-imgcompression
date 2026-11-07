@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
-import { scanDocument, inventoryAssets, attachmentStats } from "../src/core/assets";
+import { scanDocument, inventoryAssets, attachmentStats, documentStats } from "../src/core/assets";
 import { Kernel } from "../src/types";
 import { ref, report } from "./fixtures";
 
@@ -31,6 +31,21 @@ it("detects ambiguous resource paths across closed notebooks instead of merging 
   expect(result.assets).toHaveLength(1); expect(result.assets[0].blockers).toContain("ambiguousAsset");
   expect(result.assets[0].selected).toBe(false); expect(kernel.putFile).not.toHaveBeenCalled();
 });
+it("lists attachments and measures menu totals without workspace reference queries or writes", async () => {
+  const kernel = mockWorkspace();
+  const document = await scanDocument(kernel, doc);
+  expect(document.assets[0]).toMatchObject({ references: [], referencesLoaded: false });
+  expect(await documentStats(kernel, doc)).toEqual({ bytes: 45, count: 1, unknown: 0 });
+  const endpoints = vi.mocked(kernel.post).mock.calls.map(([endpoint]) => endpoint);
+  expect(endpoints.some(endpoint => /findAssetReferences|relinkAsset|getDocAssets/.test(endpoint))).toBe(false);
+  expect(kernel.putFile).not.toHaveBeenCalled();
+});
+it("uses current document source even if the kernel asset cache contains stale entries", async () => {
+  const kernel = mockWorkspace(), post = kernel.post.bind(kernel);
+  kernel.post = vi.fn(async (endpoint: string, body: unknown) => endpoint.endsWith("getDocAssets") ? ["assets/stale.png"] : post(endpoint, body)) as Kernel["post"];
+  expect(await documentStats(kernel, doc)).toEqual({ bytes: 45, count: 1, unknown: 0 });
+  expect(vi.mocked(kernel.post).mock.calls.some(([endpoint]) => endpoint.endsWith("findAssetReferences"))).toBe(false);
+});
 it("does not silently skip encrypted notebooks in filesystem inventory", async () => {
   await expect(inventoryAssets(mockWorkspace(true), new Set(["assets/a.png"]))).rejects.toThrow("incompleteScan");
 });
@@ -57,15 +72,12 @@ it("does not start document requests for an already cancelled scan", async () =>
   await expect(scanDocument(kernel, doc, undefined, undefined, controller.signal)).rejects.toThrow("cancelled");
   expect(kernel.post).not.toHaveBeenCalled();
 });
-it("accepts null/empty asset lists and missing children without scanning workspace directories", async () => {
-  for (const all of [null, []]) {
-    const kernel = mockWorkspace(true), post = kernel.post.bind(kernel);
-    kernel.post = vi.fn(async (endpoint: string, body: unknown) => endpoint.endsWith("getDocAssets") ? all : post(endpoint, body)) as Kernel["post"];
-    kernel.readFile = async () => new TextEncoder().encode(JSON.stringify({ ID: doc, Type: "NodeDocument", Properties: { title: "Empty" } })).buffer;
-    const result = await scanDocument(kernel, doc);
-    expect(result.assets).toEqual([]); expect(result.stats).toEqual({ bytes: 0, count: 0, unknown: 0 });
-    expect(vi.mocked(kernel.post).mock.calls.some(([endpoint]) => endpoint.endsWith("readDir"))).toBe(false);
-  }
+it("accepts empty documents with missing children without scanning workspace directories", async () => {
+  const kernel = mockWorkspace(true);
+  kernel.readFile = async () => new TextEncoder().encode(JSON.stringify({ ID: doc, Type: "NodeDocument", Properties: { title: "Empty" } })).buffer;
+  const result = await scanDocument(kernel, doc);
+  expect(result.assets).toEqual([]); expect(result.stats).toEqual({ bytes: 0, count: 0, unknown: 0 });
+  expect(vi.mocked(kernel.post).mock.calls.some(([endpoint]) => endpoint.endsWith("readDir"))).toBe(false);
 });
 it("still rejects real document read failures and invalid document contexts", async () => {
   const kernel = mockWorkspace(); kernel.readFile = async () => { throw new Error("disk error"); };
@@ -81,8 +93,7 @@ it("deduplicates attachment sizes and marks unavailable sizes as unknown", async
   expect(stats).toEqual({ bytes: 50, count: 2, unknown: 1 }); expect(kernel.post).toHaveBeenCalledTimes(2);
 });
 it("single-image scanning retains whole-document totals", async () => {
-  const kernel = mockWorkspace(), post = kernel.post.bind(kernel);
-  kernel.post = vi.fn(async (endpoint: string, body: unknown) => endpoint.endsWith("getDocAssets") ? ["assets/a.png", "assets/report.pdf"] : post(endpoint, body)) as Kernel["post"];
+  const kernel = mockWorkspace();
   kernel.readFile = async path => new TextEncoder().encode(JSON.stringify(path.endsWith(".sy") ? {
     ID: doc, Type: "NodeDocument", Children: [{ Type: "NodeLinkDest", Data: "assets/a.png" }, { Type: "NodeLinkDest", Data: "assets/report.pdf" }],
   } : { encrypted: false })).buffer;

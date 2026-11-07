@@ -12,6 +12,7 @@ import { profileEditor, optionsText } from "./profile";
 import { ChildPanel, originalImage, referenceViewer } from "./viewers";
 import { quickSettingsDialog } from "./quick-settings";
 import { element, formatSize, statsText } from "./common";
+import { findReferences } from "../core/references";
 export { formatSize } from "./common";
 
 export class AttachmentPanel {
@@ -204,7 +205,7 @@ export class AttachmentPanel {
         row.append(config);
       }
       row.append(element("td", "syic-nowrap", asset.sizeKnown === false ? this.t("unknownSize") : formatSize(asset.size)));
-      const refs = element("td"); refs.append(this.button(`${this.t("details")} (${asset.references.length})`, () => { referenceViewer(this.childPanel(this.t("details")), asset, this.document!, this.services?.app, this.t, this.kernel); })); row.append(refs);
+      const refs = element("td"); refs.append(this.button(asset.referencesLoaded === false ? this.t("details") : `${this.t("details")} (${asset.references.length})`, () => this.showReferences(asset))); row.append(refs);
       const status = element("td");
       if (asset.blockers.length || unsupportedImage) status.textContent = asset.blockers.length ? asset.blockers.map(reason => this.t(reason)).join("; ") : this.t(/^\.(gif|apng)$/i.test(asset.extension) ? "animatedImage" : "unsupportedImage");
       else if (this.mode === "compress") { const button = this.button(this.t("preview"), () => this.preview(asset)); button.disabled = this.working || this.manager.busy; status.append(button); }
@@ -252,13 +253,36 @@ export class AttachmentPanel {
     const selected = this.document.assets.filter(asset => asset.selected && this.available(asset));
     const refs = selected.flatMap(asset => asset.references), books = new Set(refs.map(ref => ref.notebook).filter(Boolean));
     const docs = new Set(refs.map(ref => ref.rootID).filter(Boolean));
-    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", this.t("impact", {
+    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", selected.some(asset => asset.referencesLoaded === false) ? this.t("referencesDeferred") : this.t("impact", {
       refs: refs.length, docs: docs.size, books: books.size, closed: this.document.notebooks.filter(book => book.closed && books.has(book.id)).length,
     })));
     this.updateButtons();
   }
   private available(asset: AssetIdentity): boolean {
     return !asset.blockers.length && (this.mode === "compress" ? isImageExtension(asset.extension) : isImageAttachment(asset.extension) && asset.newPath !== asset.path);
+  }
+  private async showReferences(asset: AssetIdentity): Promise<void> {
+    if (!this.document || this.working || this.manager.busy) return;
+    const panel = this.childPanel(this.t("details"));
+    if (asset.referencesLoaded === false) {
+      const controller = new AbortController(); this.scanController = controller;
+      panel.own(() => controller.abort());
+      panel.root.append(element("p", "syic-note", this.t("scanningReferences")));
+      this.working = true; this.updateButtons();
+      try {
+        const report = await findReferences(this.kernel, asset.path, controller.signal);
+        if (panel.closed || this.disposed) return;
+        asset.references = report.references; asset.referencesLoaded = true;
+        panel.root.replaceChildren();
+      } catch (error) {
+        if (!panel.closed) { panel.root.replaceChildren(); panel.root.append(element("p", "syic-error", this.t(error instanceof UserError ? error.code : "error"))); }
+        return;
+      } finally {
+        this.scanController = undefined; this.working = false;
+        if (!this.disposed) { this.renderList(); this.updateButtons(); }
+      }
+    }
+    referenceViewer(panel, asset, this.document, this.services?.app, this.t, this.kernel);
   }
   private renameInput(value: string, change: (value: string) => void, asset?: AssetIdentity): HTMLInputElement {
     const input = element("input", "b3-text-field syic-rename-input"); input.type = "text"; input.value = value;

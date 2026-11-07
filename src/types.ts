@@ -24,6 +24,7 @@ export interface ReferenceReport {
 export interface AssetIdentity {
   path: string; diskPath: string; name: string; extension: string; size: number;
   references: AssetReference[]; blockers: string[]; selected: boolean; order: number;
+  referencesLoaded?: boolean;
   newPath?: string; previewDigest?: string; sizeKnown?: boolean; renameStem?: string;
 }
 export interface AttachmentStats { bytes: number; unknown: number; count: number }
