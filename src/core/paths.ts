@@ -17,6 +17,14 @@ export function assertAssetPath(path: string): void {
 }
 export const requestPath = (path: string): string => { assertAssetPath(path); return path.split("/").map(encodeURIComponent).join("/"); };
 export const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+// resolveAssetPath returns a system path, while getFile expects a workspace
+// path. Only map the expected file under global or node-scoped assets roots.
+export function assetDiskPath(resolved: string, asset: string): string | undefined {
+  const path = resolved.replace(/\\/g, "/"), suffix = "/" + asset;
+  if (!/^(?:[a-z]:\/|\/)/i.test(path) || path.split("/").includes("..") || !path.toLowerCase().endsWith(suffix.toLowerCase())) return;
+  const root = path.slice(0, -suffix.length).match(/\/data((?:\/\d{14}-[a-z0-9]{7})*)$/i);
+  if (root) return "/data" + root[1] + path.slice(-suffix.length);
+}
 export function extensionOf(path: string): string {
   const name = basename(path), i = name.lastIndexOf(".");
   return i > 0 ? name.slice(i) : "";

@@ -11,6 +11,7 @@ import { ChildPanel } from "./ui/viewers";
 import { quickSettingsDialog } from "./ui/quick-settings";
 import { CompressionProfile, JobKind, Journal, UserError } from "./types";
 import { formatSize, statsText } from "./ui/common";
+import { checkCancelled } from "./core/cancellation";
 import "./index.css";
 
 export default class ImageCompressionPlugin extends Plugin {
@@ -26,6 +27,7 @@ export default class ImageCompressionPlugin extends Plugin {
   private unloaded = false;
   private quickBusy = false;
   private quickController?: AbortController;
+  private menuReads = new Set<AbortController>();
   private readonly imageMenu = (event: CustomEvent<IEventBusMap["open-menu-image"]>) => {
     const { menu, element, protyle } = event.detail;
     const image = element instanceof HTMLImageElement ? element : element.querySelector("img");
@@ -35,10 +37,10 @@ export default class ImageCompressionPlugin extends Plugin {
     try { local = normalizeAssetURL(path); } catch { return; }
     if (!local) return;
     const target = local;
-    this.infoItem(menu, async () => {
+    this.infoItem(menu, async signal => {
       const [size, dimensions] = await Promise.all([
-        this.api.post<{ size: number }>("/api/asset/statAsset", { path: target }).then(stat => Number.isSafeInteger(stat?.size) && stat.size >= 0 ? formatSize(stat.size) : this.t("unknownSize")).catch(() => this.t("unknownSize")),
-        this.dimensions(target, image),
+        this.api.post<{ size: number }>("/api/asset/statAsset", { path: target }, signal).then(stat => Number.isSafeInteger(stat?.size) && stat.size >= 0 ? formatSize(stat.size) : this.t("unknownSize")).catch(() => this.t("unknownSize")),
+        this.dimensions(target, image, signal),
       ]);
       return `${dimensions} · ${size}`;
     });
@@ -58,27 +60,31 @@ export default class ImageCompressionPlugin extends Plugin {
   };
   private addDocumentMenu(menu: subMenu, id: string, protyle?: IProtyle): void {
     if (!id) return;
-    this.infoItem(menu, async () => statsText(await documentStats(this.api, id), this.t));
+    this.infoItem(menu, async signal => statsText(await documentStats(this.api, id, signal), this.t));
     if (this.readonly(protyle)) return;
     menu.addItem({ icon: "iconSyicCompress", label: this.t("compressDoc"), click: () => { void this.open("compress", protyle, undefined, id); } });
     menu.addItem({ icon: "iconEdit", label: this.t("renameDoc"), click: () => { void this.open("rename", protyle, undefined, id); } });
   }
-  private infoItem(menu: subMenu, read: () => Promise<string>): void {
+  private infoItem(menu: subMenu, read: (signal: AbortSignal) => Promise<string>): void {
     menu.addItem({ type: "readonly", label: this.t("loadingInfo"), bind: node => {
-      void read().then(text => {
+      const controller = new AbortController(); this.menuReads.add(controller);
+      const timer = setInterval(() => { if (this.unloaded || !node.isConnected) controller.abort(); }, 100);
+      void Promise.resolve().then(() => { checkCancelled(controller.signal); if (!node.isConnected) throw new UserError("cancelled"); return read(controller.signal); }).then(text => {
         if (this.unloaded || !node.isConnected) return;
         const label = node.querySelector(".b3-menu__label") || node; label.textContent = text;
       }).catch(() => {
         if (!this.unloaded && node.isConnected) (node.querySelector(".b3-menu__label") || node).textContent = this.t("readFailed");
-      });
+      }).finally(() => { clearInterval(timer); this.menuReads.delete(controller); });
     } });
   }
-  private async dimensions(path: string, existing: HTMLImageElement | null): Promise<string> {
+  private async dimensions(path: string, existing: HTMLImageElement | null, signal?: AbortSignal): Promise<string> {
+    checkCancelled(signal);
     if (existing?.naturalWidth) return `${existing.naturalWidth} × ${existing.naturalHeight}`;
     const image = new Image(); image.src = assetURL(path);
-    try { await image.decode(); return `${image.naturalWidth} × ${image.naturalHeight}`; }
-    catch { return this.t("unknownDimensions"); }
-    finally { image.removeAttribute("src"); }
+    const abort = () => image.removeAttribute("src"); signal?.addEventListener("abort", abort, { once: true });
+    try { await image.decode(); checkCancelled(signal); return `${image.naturalWidth} × ${image.naturalHeight}`; }
+    catch { checkCancelled(signal); return this.t("unknownDimensions"); }
+    finally { signal?.removeEventListener("abort", abort); image.removeAttribute("src"); }
   }
   async onload(): Promise<void> {
     this.t = translator(this.i18n);
@@ -145,7 +151,7 @@ export default class ImageCompressionPlugin extends Plugin {
     };
     try {
       showMessage(this.t("scanning")); const options = cloneProfile(this.settings.quick).options;
-      const doc = await scanDocument(this.api, protyle.block.rootID || "", path, undefined, controller.signal);
+      const doc = await scanDocument(this.api, protyle.block.rootID || "", path, undefined, controller.signal, false);
       if (this.unloaded) return;
       manager.onProgress = progress;
       const job = await manager.run(doc, "compress", options);
@@ -159,6 +165,8 @@ export default class ImageCompressionPlugin extends Plugin {
   }
   onunload(): void {
     this.unloaded = true;
+    this.api.cancelReads();
+    for (const controller of this.menuReads) controller.abort(); this.menuReads.clear();
     this.quickController?.abort();
     this.eventBus.off("open-menu-image", this.imageMenu); this.eventBus.off("click-editortitleicon", this.documentMenu); this.eventBus.off("open-menu-doctree", this.treeMenu);
     this.manager?.cancel(); this.dialog?.destroy(); this.quickDialog?.destroy(); this.panel?.dispose();

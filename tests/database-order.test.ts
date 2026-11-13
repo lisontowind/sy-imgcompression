@@ -47,3 +47,17 @@ it("rejects missing database sources and preserves cancellation", async () => {
   controller.abort();
   await expect(databaseSourcePaths(kernel, new Set([id]), controller.signal)).rejects.toThrow("cancelled");
 });
+it("skips plain database text, renders repeated Markdown once and keeps source order", async () => {
+  const id = "20261016000000-abcdefg";
+  const values = Array.from({ length: 1000 }, () => ({ text: { rich: { content: "ordinary text" } } }));
+  values.push({ text: { rich: { content: "[first](assets/first.png)" } } }, { text: { rich: { content: "[second](assets/second.png)" } } });
+  values.push(...Array.from({ length: 100 }, () => ({ text: { rich: { content: "[first](assets/first.png)" } } })));
+  const readFile = async () => new TextEncoder().encode(JSON.stringify({ id, keyValues: [{ values }] })).buffer;
+  const post = vi.fn(async (_endpoint: string, body: { markdown: string }) => {
+    const name = body.markdown.includes("first") ? "first" : "second";
+    if (name === "first") await new Promise(resolve => setTimeout(resolve, 5));
+    return { html: `<a href="assets/${name}.png">link</a>` };
+  });
+  expect(await databaseSourcePaths({ readFile, post } as unknown as Kernel, new Set([id]))).toEqual(["assets/first.png", "assets/second.png"]);
+  expect(post).toHaveBeenCalledTimes(2);
+});

@@ -40,6 +40,14 @@ function change(root: ParentNode, label: string, value: string) {
   const node = root.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
   node.value = value; node.dispatchEvent(new Event("change", { bubbles: true }));
 }
+it("does not request thumbnails for attachments that are not available locally", async () => {
+  const deferred = structuredClone(doc);
+  Object.assign(deferred.assets[0], { diskPath: "", blockers: ["missingLocalAsset"], selected: false });
+  vi.mocked(scanDocument).mockResolvedValueOnce(deferred);
+  const { root } = await setup(), rows = root.querySelectorAll("tbody tr");
+  expect(rows[0].querySelector("img")).toBeNull(); expect(rows[0].querySelector("input")!.disabled).toBe(true);
+  expect(rows[1].querySelector("img")).not.toBeNull();
+});
 it("opens originals and preview panels without compressing until requested", async () => {
   const { root, compressor } = await setup(); const list = root.querySelector<HTMLElement>(".syic-list")!; list.scrollTop = 60;
   await click("View image: a.png"); expect(compressor.compress).not.toHaveBeenCalled(); expect(root.querySelector(".syic-original")).toBeNull();
@@ -151,6 +159,24 @@ it("previews batch prefixes and per-image names, preserving overrides across glo
   expect(root.querySelector<HTMLInputElement>('[aria-label="Individual name: a.png"]')!.value).toBe("封面");
   await click("Use batch prefix", root); expect(root.querySelectorAll(".syic-rename-target")[0].textContent).toMatch(/^照片-/);
 });
+it("keeps rows and thumbnails while batch prefixes and individual names are edited", async () => {
+  const { root } = await setup(); await click("Image renaming", root);
+  const rows = [...root.querySelectorAll("tbody tr")], images = rows.map(row => row.querySelector("img"));
+  change(root, "Batch filename prefix", "Photos"); change(root, "Individual name: a.png", "Cover");
+  expect([...root.querySelectorAll("tbody tr")]).toEqual(rows);
+  expect(rows.map(row => row.querySelector("img"))).toEqual(images);
+});
+it("updates no-change selection and status without rebuilding renamed rows", async () => {
+  const normalized = structuredClone(doc);
+  Object.assign(normalized.assets[0], { path: "assets/Cover-20261016000100-abcdefg.png", name: "Cover-20261016000100-abcdefg.png" });
+  vi.mocked(scanDocument).mockResolvedValueOnce(normalized);
+  const { root } = await setup(); await click("Image renaming", root);
+  const row = root.querySelector("tbody tr")!;
+  change(root, "Batch filename prefix", "Cover");
+  expect(root.querySelector("tbody tr")).toBe(row); expect(row.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+  expect(row.querySelector(".syic-item-status")!.textContent).toContain("No changes");
+  change(root, "Batch filename prefix", "Photos"); expect(row.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+});
 it("blocks invalid visible names and re-enables apply after correction", async () => {
   const { root } = await setup(); await click("Image renaming", root);
   const apply = [...root.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Apply to selected attachments")!;
@@ -195,9 +221,11 @@ it("renders job item details only when history is expanded and preserves expansi
   const details = root.querySelector<HTMLDetailsElement>(".syic-history details")!;
   details.open = true; details.dispatchEvent(new Event("toggle"));
   expect(root.querySelectorAll(".syic-job-item")).toHaveLength(500);
+  const firstItem = root.querySelector(".syic-job-item");
   manager.onChange?.();
   expect(root.querySelector<HTMLDetailsElement>(".syic-history details")!.open).toBe(true);
   expect(root.querySelectorAll(".syic-job-item")).toHaveLength(500);
+  expect(root.querySelector(".syic-job-item")).toBe(firstItem);
 });
 it("cancels an in-flight scan when the panel closes", async () => {
   await setup(); let signal: AbortSignal | undefined;

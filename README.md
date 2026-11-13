@@ -56,6 +56,35 @@ PDF and other non-image files are excluded. Conflicting destinations are skipped
 never overwritten. Compressed outputs use `image-<new ID>.<output extension>`.
 Old journals, including document-prefix renames, remain recoverable.
 
+Attachment lists resolve only the current document's files and database assets,
+without walking workspace directories. Metadata and path lookups use up to six
+concurrent requests and report progress while loading. Deferred assets contribute
+to size totals without being downloaded just to populate the list. Ambiguity and
+workspace completeness are still checked before applying any changes.
+
+Multi-image renaming uses the kernel's batch API for the baseline, dry run,
+migration and final verification: four workspace reference requests per batch.
+Files are copied and checked individually to keep image memory bounded. Destination
+conflicts are checked without repeatedly listing the whole attachment directory.
+Recovery checkpoints are saved by phase. Failure or cancellation verifies and attempts to
+restore the affected batch. Older kernels that explicitly reject batch lookups
+retain the slower per-image workflow.
+
+Compression also shares four workspace reference requests per batch. Pending
+outputs are flushed at 128 images or a 32 MiB output budget, which may include
+one additional image being encoded; each image still releases its Worker.
+Recovery checks files and references in batches of at most 128 items and never
+automatically retries a mutation with an unknown result. Read-only queries and
+dry runs can be cancelled; actual writes and verification finish before recovery.
+
+Concurrent identical menu totals and metadata share pending reads, with at most
+six metadata requests overall and no completed-result cache. Closing a menu or
+reference panel cancels its unused reads. Database Markdown is deduplicated per
+scan and plain text needs no conversion. Quick single-image compression reads
+only that image's size; single-image panels retain document-wide totals.
+Name edits, reference detail updates and history refreshes preserve unchanged
+rows, thumbnails and expanded history content.
+
 ## Illustrated guide
 
 The illustrations below use the actual plugin interface with example documents.

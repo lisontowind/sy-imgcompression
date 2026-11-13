@@ -1,6 +1,6 @@
 import { KernelError } from "../api";
 import { AssetReference, Kernel, ReferenceReport, UserError } from "../types";
-import { requestPath, rewriteReference } from "./paths";
+import { normalizeAssetURL, requestPath, rewriteReference } from "./paths";
 import { checkCancelled } from "./cancellation";
 
 export function assertComplete(report: ReferenceReport): void {
@@ -23,9 +23,40 @@ export async function findReferences(kernel: Kernel, path: string, signal?: Abor
   checkCancelled(signal); assertComplete(report); return report;
 }
 
-export async function relink(kernel: Kernel, oldPath: string, newPath: string, dryRun: boolean): Promise<ReferenceReport> {
-  const report = await kernel.post<ReferenceReport>("/api/asset/relinkAsset", { oldPath: requestPath(oldPath), newPath: requestPath(newPath), dryRun });
+export async function relink(kernel: Kernel, oldPath: string, newPath: string, dryRun: boolean, signal?: AbortSignal): Promise<ReferenceReport> {
+  const report = await kernel.post<ReferenceReport>("/api/asset/relinkAsset", { oldPath: requestPath(oldPath), newPath: requestPath(newPath), dryRun }, dryRun ? signal : undefined);
   assertComplete(report); return report;
+}
+
+export interface AssetMapping { oldPath: string; newPath: string }
+
+// Batch responses must account for every requested path exactly once. Never
+// mistake an old kernel ignoring the batch fields for an empty reference set.
+export function batchReferences(report: ReferenceReport, mappings: AssetMapping[]): Map<string, AssetReference[]> {
+  assertComplete(report);
+  if (!Array.isArray(report.items) || report.items.length !== mappings.length) throw new UserError("unsupportedKernel");
+  const expected = new Map(mappings.map(item => [item.oldPath, item.newPath]));
+  const result = new Map<string, AssetReference[]>();
+  for (const item of report.items) {
+    const oldPath = normalizeAssetURL(item.oldPath), newPath = item.newPath ? normalizeAssetURL(item.newPath) : "";
+    if (!oldPath || !expected.has(oldPath) || result.has(oldPath) || newPath !== expected.get(oldPath)
+        || item.ok !== true || !Array.isArray(item.references)) throw new UserError("unsupportedKernel");
+    assertComplete({ ...report, references: item.references });
+    result.set(oldPath, item.references);
+  }
+  return result;
+}
+
+export async function findReferencesBatch(kernel: Kernel, paths: string[], signal?: AbortSignal): Promise<Map<string, AssetReference[]>> {
+  const report = await kernel.post<ReferenceReport>("/api/asset/findAssetReferences", { paths: paths.map(requestPath) }, signal);
+  return batchReferences(report, paths.map(oldPath => ({ oldPath, newPath: "" })));
+}
+
+export async function relinkBatch(kernel: Kernel, mappings: AssetMapping[], dryRun: boolean, signal?: AbortSignal): Promise<{ report: ReferenceReport; references: Map<string, AssetReference[]> }> {
+  const report = await kernel.post<ReferenceReport>("/api/asset/relinkAsset", {
+    mappings: mappings.map(item => ({ oldPath: requestPath(item.oldPath), newPath: requestPath(item.newPath) })), dryRun,
+  }, dryRun ? signal : undefined);
+  return { report, references: batchReferences(report, mappings) };
 }
 
 export function referenceKey(ref: AssetReference): string {

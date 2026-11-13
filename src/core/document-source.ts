@@ -7,13 +7,13 @@ export interface SourceNode {
   AttributeViewID?: string;
 }
 export interface SourceInventory { title: string; paths: string[]; databaseDOM: string; databaseIds: Set<string> }
-function unescapeHTML(value: string): string { const node = document.createElement("textarea"); node.innerHTML = value; return node.value; }
+function unescapeHTML(value: string): string { if (!value.includes("&")) return value; const node = document.createElement("textarea"); node.innerHTML = value; return node.value; }
 
 /** Read only the document's own source tree; never expand block references or embeds. */
 export function documentSourceInventory(root: SourceNode, id: string): SourceInventory {
   if (!root || root.Type !== "NodeDocument" || root.ID !== id || (root.Children != null && !Array.isArray(root.Children))) throw new UserError("readFailed", id);
-  const paths: string[] = [], views: string[] = [], databaseIds = new Set<string>();
-  const add = (raw: string) => { const path = normalizeAssetURL(unescapeHTML(raw)); if (path && !paths.includes(path)) paths.push(path); };
+  const paths: string[] = [], seen = new Set<string>(), views: string[] = [], databaseIds = new Set<string>();
+  const add = (raw: string) => { const path = normalizeAssetURL(unescapeHTML(raw)); if (path && !seen.has(path)) { seen.add(path); paths.push(path); } };
   const css = (value: string) => { for (const match of unescapeHTML(value).matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) add(match[1].trim()); };
   css(root.Properties?.["title-img"] || "");
   const visit = (node: SourceNode) => {

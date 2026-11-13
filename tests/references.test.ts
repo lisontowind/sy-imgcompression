@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { assertComplete, assertNoUnexpectedReferences, expectedAfter, referenceFingerprint } from "../src/core/references";
-import { normalizeAssetURL, requestPath, rewriteReference } from "../src/core/paths";
+import { assetDiskPath, normalizeAssetURL, requestPath, rewriteReference } from "../src/core/paths";
 import { orderedPaths } from "../src/core/assets";
 import { ref, report } from "./fixtures";
 describe("structural reference safety", () => {
+  it("maps native resolved paths into portable workspace asset paths", () => {
+    expect(assetDiskPath("D:\\Workspace\\data\\assets\\中文 %.png", "assets/中文 %.png")).toBe("/data/assets/中文 %.png");
+    expect(assetDiskPath("/home/workspace/data/20261016000100-abcdefg/20261016000200-abcdefg/assets/data/a.png", "assets/data/a.png"))
+      .toBe("/data/20261016000100-abcdefg/20261016000200-abcdefg/assets/data/a.png");
+    expect(assetDiskPath("/data/assets/a.png", "assets/a.png")).toBe("/data/assets/a.png");
+    expect(assetDiskPath("/home/workspace/data/unexpected/assets/a.png", "assets/a.png")).toBeUndefined();
+    expect(assetDiskPath("/home/workspace/data/assets/b.png", "assets/a.png")).toBeUndefined();
+    expect(assetDiskPath("/home/workspace/data/../assets/a.png", "assets/a.png")).toBeUndefined();
+  });
   it("handles encoded paths and rejects escapes and external URLs", () => {
     expect(normalizeAssetURL("/assets/%E4%B8%AD%20%E6%96%87.png?x=1#part")).toBe("assets/中 文.png");
     expect(normalizeAssetURL("https://example.com/assets/a.png")).toBeUndefined();

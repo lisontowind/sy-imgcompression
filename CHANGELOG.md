@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.1.7 — 2026-11-13
+
+- 跟进 [#1](https://github.com/lisontowind/sy-imgcompression/issues/1)：补齐 0.1.4 未覆盖的附件目录遍历、批量处理与恢复中的重复扫描问题。
+
+- 批量压缩合并引用基线、演练、迁移及核验；每批最多 128 项，待写入结果以 32 MiB 为目标上限（最多额外保留一张结果），不同时保留全部图片。
+- 批量恢复合并新旧路径核验，保留哈希、引用多重集校验及未知结果保护；取消可中断查询和演练，实际修改与后验核验不中断。
+- 合并正在进行的相同菜单统计与元数据请求，统一限制最多 6 个元数据请求；菜单和引用子面板关闭后取消未完成的读取，不缓存已完成的结果。
+- 快捷单图压缩仅查询所选图片体积，不再统计同篇文章的其他附件。
+- 数据库普通富文本跳过转换，重复 Markdown 每次扫描只转换一次，不同内容最多并发 6 个，保留附件顺序。
+- 修改图片名称、查看引用详情及更新历史记录时保留未改变的行、缩略图和历史明细节点，减少重建与图片重复加载。
+- 日志读取只把明确的文件不存在结果视为空记录，权限错误和异常响应继续阻止写入。
+
+Batch compression and recovery share native workspace passes with bounded output
+memory. Coalesce pending read-only metadata, cancel reads from closed views,
+deduplicate database Markdown conversions and preserve unchanged UI nodes.
+
+## 0.1.6 — 2026-11-13
+
+- 修复读取文章附件时遍历全工作空间目录的问题：仅读取当前文档及数据库中的附件，使用内核解析实际文件位置，元数据与路径请求最多并发 6 个。
+- 附件统计和路径解析期间立即更新进度；未下载的延迟同步附件保留大小统计，不为构建列表主动下载。
+- 路径歧义、符号链接和工作空间完整性仍由修改前的原生引用核验阻止，不在只读列表阶段重复遍历全库。
+- 覆盖 118 项列表读取、中文/空格/百分号名称、笔记本局部附件、取消和歧义附件阻止修改。
+
+Document attachment lists now use bounded native path resolution instead of
+walking every workspace directory. Show progress during metadata lookup, avoid
+downloading deferred assets for listing, and retain fresh native mutation checks.
+
+## 0.1.5 — 2026-11-13
+
+- 修复批量重命名逐张重复扫描工作空间的问题：支持批量接口的内核中，118 张图片的引用请求由 590 次减少为 4 次。
+- 写入前直接检查目标文件，不再为每个目标重新枚举整个附件目录；权限或读取错误仍阻止写入。
+- 按准备、迁移和完成阶段保存任务日志，减少整份日志重复写入和历史面板刷新；保留逐文件哈希校验和旧日志兼容。
+- 迁移前持久化所有映射的恢复信息；部分失败或取消时核验并尝试恢复所有受影响项，失败项继续保留恢复入口。
+- 新增 118 张图片、关闭笔记本共享引用、文件变化、引用变化、取消和部分失败恢复的回归检查。
+
+Batch image renames now share four native workspace reference requests and phase
+checkpoints, with per-file verification, durable recovery records and a read-only
+capability fallback for older kernels.
+
 ## 0.1.4 — 2026-11-07
 
 - 修复 [#1](https://github.com/lisontowind/sy-imgcompression/issues/1)：菜单统计、附件列表、刷新和压缩预览不再触发全工作空间引用查询。

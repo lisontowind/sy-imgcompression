@@ -31,6 +31,8 @@ export class AttachmentPanel {
   private filter = "all";
   private minBytes = 0;
   private historyLimit = 20;
+  private historyEntries = new Map<string, { details: HTMLDetailsElement; key: string }>();
+  private listDisabled = new Map<HTMLInputElement | HTMLButtonElement, boolean>();
   private tabs = element("div", "syic-tabs");
   private controls = element("div", "syic-controls");
   private summary = element("div", "syic-summary");
@@ -174,7 +176,7 @@ export class AttachmentPanel {
       checkbox.disabled = !available(asset) || this.working || this.manager.busy; checkbox.setAttribute("aria-label", asset.name);
       checkbox.addEventListener("change", () => { asset.selected = checkbox.checked; this.renderControls(); this.updateSelection(); }); selectCell.append(checkbox);
       const thumb = element("td");
-      if (isImageAttachment(asset.extension)) {
+      if (isImageAttachment(asset.extension) && asset.diskPath) {
         const view = this.button(this.t("viewImage"), () => { originalImage(this.childPanel(asset.name).root, asset, this.t); });
         view.classList.add("syic-thumbnail-button"); view.setAttribute("aria-label", `${this.t("viewImage")}: ${asset.name}`);
         const img = element("img", "syic-thumbnail"); img.loading = "lazy"; img.alt = asset.name; img.src = assetURL(asset.path);
@@ -182,21 +184,7 @@ export class AttachmentPanel {
       } else thumb.textContent = "—";
       const original = element("td", "syic-filename", asset.name); original.title = asset.path; row.append(selectCell, thumb, original);
       if (this.mode === "rename") {
-        const cell = element("td", "syic-filename");
-        if (isImageAttachment(asset.extension) && !asset.blockers.length) {
-          const input = this.renameInput(asset.renameStem || "", value => {
-            asset.renameStem = value || undefined;
-            assignRenamePaths(this.document!.assets, this.document!.title, this.renameOptions);
-            asset.selected = this.available(asset);
-          }, asset);
-          input.setAttribute("aria-label", `${this.t("individualName")}: ${asset.name}`);
-          input.placeholder = this.renameOptions.prefix || "image"; input.disabled = this.working || this.manager.busy;
-          cell.append(input, element("div", "syic-rename-target", asset.newPath ? basename(asset.newPath) : "—"));
-          if (asset.renameStem) {
-            const reset = this.button(this.t("inheritPrefix"), () => { asset.renameStem = undefined; assignRenamePaths(this.document!.assets, this.document!.title, this.renameOptions); asset.selected = this.available(asset); this.renderList(); });
-            reset.disabled = this.working || this.manager.busy; cell.append(reset);
-          }
-        } else cell.textContent = "—";
+        const cell = element("td", "syic-filename syic-rename-cell"); this.renderRenameCell(cell, asset);
         row.append(cell);
       }
       else {
@@ -205,8 +193,8 @@ export class AttachmentPanel {
         row.append(config);
       }
       row.append(element("td", "syic-nowrap", asset.sizeKnown === false ? this.t("unknownSize") : formatSize(asset.size)));
-      const refs = element("td"); refs.append(this.button(asset.referencesLoaded === false ? this.t("details") : `${this.t("details")} (${asset.references.length})`, () => this.showReferences(asset))); row.append(refs);
-      const status = element("td");
+      const refs = element("td", "syic-references"); refs.append(this.button(asset.referencesLoaded === false ? this.t("details") : `${this.t("details")} (${asset.references.length})`, () => this.showReferences(asset))); row.append(refs);
+      const status = element("td", "syic-item-status");
       if (asset.blockers.length || unsupportedImage) status.textContent = asset.blockers.length ? asset.blockers.map(reason => this.t(reason)).join("; ") : this.t(/^\.(gif|apng)$/i.test(asset.extension) ? "animatedImage" : "unsupportedImage");
       else if (this.mode === "compress") { const button = this.button(this.t("preview"), () => this.preview(asset)); button.disabled = this.working || this.manager.busy; status.append(button); }
       else status.textContent = this.t(!isImageAttachment(asset.extension) ? "imagesOnly" : asset.newPath === asset.path ? "noChanges" : "ready");
@@ -217,6 +205,9 @@ export class AttachmentPanel {
     this.list.scrollTop = scroll;
   }
   private renderImageSettings(config: HTMLElement, asset: AssetIdentity): void {
+    const key = JSON.stringify([this.perImage.has(asset.path), this.effective(asset)]);
+    if (config.dataset.profileKey === key) return;
+    config.dataset.profileKey = key;
     config.replaceChildren();
     if (!isImageExtension(asset.extension)) { config.textContent = "—"; return; }
     config.append(element("div", "syic-note", this.t(this.perImage.has(asset.path) ? "individual" : "inherited")), element("div", "", optionsText(this.effective(asset), this.t)));
@@ -225,6 +216,36 @@ export class AttachmentPanel {
       const reset = this.button(this.t("inheritGlobal"), () => { this.perImage.delete(asset.path); this.previewChanged?.(); this.refreshCompressionSettings(); });
       reset.disabled = this.working || this.manager.busy; config.append(reset);
     }
+  }
+  private renderRenameCell(cell: HTMLElement, asset: AssetIdentity): void {
+    cell.replaceChildren();
+    if (!isImageAttachment(asset.extension) || asset.blockers.length) { cell.textContent = "—"; return; }
+    const input = this.renameInput(asset.renameStem || "", value => {
+      asset.renameStem = value || undefined;
+      assignRenamePaths([asset], this.document!.title, this.renameOptions); asset.selected = this.available(asset);
+    }, asset);
+    input.setAttribute("aria-label", `${this.t("individualName")}: ${asset.name}`);
+    input.placeholder = this.renameOptions.prefix || "image"; input.disabled = this.working || this.manager.busy;
+    cell.append(input, element("div", "syic-rename-target", asset.newPath ? basename(asset.newPath) : "—"));
+    if (asset.renameStem) {
+      const reset = this.button(this.t("inheritPrefix"), () => {
+        asset.renameStem = undefined; assignRenamePaths([asset], this.document!.title, this.renameOptions);
+        asset.selected = this.available(asset); this.refreshRenameNames(asset);
+      }); reset.disabled = this.working || this.manager.busy; cell.append(reset);
+    }
+  }
+  private refreshRenameNames(changed?: AssetIdentity): void {
+    if (!this.document) return;
+    const assets = new Map(this.document.assets.map(asset => [asset.path, asset]));
+    for (const row of this.list.querySelectorAll<HTMLTableRowElement>("tbody tr")) {
+      const asset = assets.get(row.dataset.assetPath!), cell = row.querySelector<HTMLElement>(".syic-rename-cell");
+      if (asset && cell && (!changed || asset === changed)) {
+        this.renderRenameCell(cell, asset);
+        const status = row.querySelector<HTMLElement>(".syic-item-status");
+        if (status && !asset.blockers.length) status.textContent = this.t(!isImageAttachment(asset.extension) ? "imagesOnly" : asset.newPath === asset.path ? "noChanges" : "ready");
+      }
+    }
+    this.updateSelection();
   }
   private refreshCompressionSettings(): void {
     const assets = new Map(this.document?.assets.map(asset => [asset.path, asset]));
@@ -240,7 +261,7 @@ export class AttachmentPanel {
     const assets = new Map(visible.map(asset => [asset.path, asset]));
     for (const row of this.list.querySelectorAll<HTMLTableRowElement>("tbody tr")) {
       const checkbox = row.querySelector<HTMLInputElement>('input[type="checkbox"]'), asset = assets.get(row.dataset.assetPath!);
-      if (checkbox && asset) checkbox.checked = asset.selected;
+      if (checkbox && asset) { checkbox.checked = asset.selected; checkbox.disabled = this.working || this.manager.busy || !this.available(asset); }
     }
     const selectAll = this.list.querySelector<HTMLInputElement>("thead input");
     if (selectAll) {
@@ -279,7 +300,13 @@ export class AttachmentPanel {
         return;
       } finally {
         this.scanController = undefined; this.working = false;
-        if (!this.disposed) { this.renderList(); this.updateButtons(); }
+        if (!this.disposed) {
+          for (const row of this.list.querySelectorAll<HTMLTableRowElement>("tbody tr")) if (row.dataset.assetPath === asset.path) {
+            const button = row.querySelector<HTMLButtonElement>(".syic-references button");
+            if (button) button.textContent = asset.referencesLoaded === false ? this.t("details") : `${this.t("details")} (${asset.references.length})`;
+          }
+          this.updateSelection();
+        }
       }
     }
     referenceViewer(panel, asset, this.document, this.services?.app, this.t, this.kernel);
@@ -291,7 +318,8 @@ export class AttachmentPanel {
       input.setCustomValidity(""); const name = input.value.normalize("NFC").trim();
       try {
         const targets = asset ? [asset] : this.document?.assets.filter(item => isImageAttachment(item.extension) && !item.renameStem) || [];
-        for (const item of targets.length ? targets : [{ name: "image.png", extension: ".png" }]) imageRename(item.name, item.extension, "20261016000000-abcdefg", name || (asset ? this.renameOptions.prefix : undefined) || "image");
+        const extensions = new Set((targets.length ? targets : [{ extension: ".png" }]).map(item => item.extension));
+        for (const extension of extensions) imageRename("image" + extension, extension, "20261016000000-abcdefg", name || (asset ? this.renameOptions.prefix : undefined) || "image");
         input.removeAttribute("aria-invalid"); return name;
       } catch {
         input.setCustomValidity(this.t("invalidFilename")); input.setAttribute("aria-invalid", "true"); return undefined;
@@ -300,7 +328,7 @@ export class AttachmentPanel {
     input.addEventListener("input", () => { validate(); this.updateButtons(); });
     input.addEventListener("change", () => {
       const name = validate(); if (name === undefined) { input.reportValidity(); this.updateButtons(); return; }
-      change(name); input.value = asset ? name : name || "image"; this.renderList();
+      change(name); input.value = asset ? name : name || "image"; this.refreshRenameNames(asset);
     }); return input;
   }
   private updateButtons(): void {
@@ -310,7 +338,14 @@ export class AttachmentPanel {
     this.applyButton.disabled = busy || !!this.root.querySelector("input:invalid") || !this.document?.assets.some(asset => asset.selected && this.available(asset));
     this.controls.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input, select, button").forEach(input => { input.disabled = busy || input.dataset.locked === "true"; });
     this.tabs.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
-    if (busy) this.list.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button").forEach(node => { node.disabled = true; });
+    if (busy) this.list.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button").forEach(node => {
+      if (!this.listDisabled.has(node)) this.listDisabled.set(node, node.disabled);
+      node.disabled = true;
+    });
+    else {
+      for (const [node, disabled] of this.listDisabled) if (node.isConnected) node.disabled = disabled;
+      this.listDisabled.clear();
+    }
     this.history.querySelectorAll<HTMLButtonElement>("button").forEach(node => { node.disabled = busy; });
   }
   private async scan(): Promise<void> {
@@ -433,16 +468,25 @@ export class AttachmentPanel {
     finally { this.scanController = undefined; this.working = false; if (!this.disposed) { this.renderList(); this.renderHistory(); this.updateButtons(); } }
   }
   private renderHistory(): void {
-    const expanded = new Set([...this.history.querySelectorAll<HTMLDetailsElement>("details[data-job-id][open]")].map(node => node.dataset.jobId));
-    this.history.replaceChildren(element("h3", "", this.t("history")));
+    if (!this.history.querySelector("h3")) this.history.append(element("h3", "", this.t("history")));
+    const visible = new Set(this.manager.journal.jobs.slice(0, this.historyLimit).map(job => job.id));
+    for (const [id, entry] of this.historyEntries) if (!visible.has(id)) { entry.details.remove(); this.historyEntries.delete(id); }
+    this.history.querySelector(".syic-more-history")?.remove();
+    let position = 1;
     for (const job of this.manager.journal.jobs.slice(0, this.historyLimit)) {
-      const details = element("details"), summary = element("summary", "", `${new Date(job.created).toLocaleString()} · ${job.documentTitle} · ${this.t(job.kind === "compress" ? "compress" : "rename")} · ${this.t(job.state)}`);
-      details.dataset.jobId = job.id; details.open = expanded.has(job.id);
-      details.append(summary);
-      let populated = false;
-      const populate = () => {
-        if (!details.open || populated) return;
-        populated = true;
+      let entry = this.historyEntries.get(job.id);
+      if (!entry) {
+        const details = element("details"); details.dataset.jobId = job.id;
+        details.addEventListener("toggle", () => { if (!this.disposed) this.renderHistory(); });
+        entry = { details, key: "" }; this.historyEntries.set(job.id, entry);
+      }
+      const { details } = entry;
+      const key = JSON.stringify([job.created, job.documentTitle, job.kind, job.state, details.open,
+        details.open ? job.items.map(item => [item.state, item.oldPath, item.newPath, item.error]) : undefined]);
+      if (entry.key !== key) {
+        entry.key = key;
+        details.replaceChildren(element("summary", "", `${new Date(job.created).toLocaleString()} · ${job.documentTitle} · ${this.t(job.kind === "compress" ? "compress" : "rename")} · ${this.t(job.state)}`));
+        if (details.open) {
         for (const item of job.items) {
           const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n→ ${item.newPath || "—"}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
         }
@@ -455,12 +499,14 @@ export class AttachmentPanel {
             finally { await this.refreshAfterJob(); }
           }); restore.disabled = this.working || this.manager.busy; details.append(restore);
         }
-      };
-      details.addEventListener("toggle", populate); populate();
-      this.history.append(details);
+        }
+      }
+      const anchor = this.history.children[position++];
+      if (anchor !== details) this.history.insertBefore(details, anchor || null);
     }
     if (this.manager.journal.jobs.length > this.historyLimit) {
-      this.history.append(this.button(this.t("moreHistory"), () => { this.historyLimit += 20; this.renderHistory(); }));
+      const more = this.button(this.t("moreHistory"), () => { this.historyLimit += 20; this.renderHistory(); });
+      more.classList.add("syic-more-history"); this.history.append(more);
     }
   }
 }

@@ -29,6 +29,7 @@ export function originalImage(root: HTMLElement, asset: AssetIdentity, t: Transl
 }
 
 export function referenceViewer(panel: ChildPanel, asset: AssetIdentity, doc: DocumentAssets, app: App | undefined, t: Translator, kernel: Kernel): void {
+  const controller = new AbortController(); panel.own(() => controller.abort());
   const layout = element("div", "syic-reference-layout"), list = element("div", "syic-reference-list"), content = element("div", "syic-reference-content");
   layout.append(list, content); panel.root.append(layout);
   let reader: Protyle | undefined, generation = 0;
@@ -43,7 +44,7 @@ export function referenceViewer(panel: ChildPanel, asset: AssetIdentity, doc: Do
       const token = ++generation; reader?.destroy(); reader = undefined; content.replaceChildren();
       if (!app || book?.closed || !ref.rootID) { error(); return; }
       try {
-        await kernel.post("/api/block/getBlockInfo", { id: ref.blockID || ref.rootID });
+        await kernel.post("/api/block/getBlockInfo", { id: ref.blockID || ref.rootID }, controller.signal);
         if (panel.closed || token !== generation) return;
         const mount = element("div", "syic-reader"); content.append(mount);
         reader = new Protyle(app, mount, { blockId: ref.blockID || ref.rootID, rootId: ref.rootID, mode: "wysiwyg", action: ["cb-get-hl", "cb-get-context", "cb-get-av-no-create"],
@@ -55,7 +56,7 @@ export function referenceViewer(panel: ChildPanel, asset: AssetIdentity, doc: Do
     }, error);
     row.append(target); list.append(row);
     if (ref.rootID && ref.rootID !== doc.id) {
-      if (!titles.has(ref.rootID)) titles.set(ref.rootID, kernel.post<{ name: string }>("/api/block/getDocInfo", { id: ref.rootID }).then(info => info?.name || ref.rootID).catch(() => ref.rootID));
+      if (!titles.has(ref.rootID)) titles.set(ref.rootID, kernel.post<{ name: string }>("/api/block/getDocInfo", { id: ref.rootID }, controller.signal).then(info => info?.name || ref.rootID).catch(() => ref.rootID));
       void titles.get(ref.rootID)!.then(title => { if (!panel.closed) target.textContent = label(title); });
     }
   }

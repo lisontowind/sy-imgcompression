@@ -26,11 +26,17 @@ async function api(endpoint, body = {}) {
   const data = await r.json(); if (data.code !== 0) throw new Error(endpoint + ": " + data.msg); return data.data;
 }
 const results = [];
+const metrics = {};
+let measuringRename = false;
+let renameAPITimings = {};
 async function readJournal() {
   const response = await fetch(origin + '/api/file/getFile', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Token ' + token }, body: JSON.stringify({ path: '/data/storage/petal/sy-imgcompression/jobs.json' }) });
   assert.equal(response.status, 200); return response.json();
 }
-async function check(name, fn) { if (process.env.SYIC_GUIDE_ONLY === "1") return; await fn(); results.push(name); console.log("PASS " + name); }
+async function check(name, fn) {
+  if (process.env.SYIC_GUIDE_ONLY === "1" || (process.env.SYIC_BATCH_ONLY === "1" && !name.startsWith("118 images"))) return;
+  await fn(); results.push(name); console.log("PASS " + name);
+}
 try {
   console.log("Starting isolated SiYuan kernel…");
   let ready = false;
@@ -53,6 +59,7 @@ try {
   const first = await api("/api/notebook/createNotebook", { name: "Plugin fixture A" });
   const second = await api("/api/notebook/createNotebook", { name: "Plugin fixture closed" });
   const bookA = first.notebook.id, bookB = second.notebook.id;
+  const batchBook = (await api("/api/notebook/createNotebook", { name: "Batch closed references" })).notebook.id;
 
   let messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/en_US.json"), "utf8"));
   let activeId = "";
@@ -66,9 +73,15 @@ try {
   server = http.createServer(async (req, res) => {
     try {
       if (req.url.startsWith("/api/")) {
+        const started = performance.now();
         const chunks = []; for await (const chunk of req) chunks.push(chunk);
         const upstream = await fetch(origin + req.url, { method: req.method, headers: { "Content-Type": req.headers["content-type"] || "application/json", Authorization: "Token " + token }, body: Buffer.concat(chunks) });
-        res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/octet-stream" }); res.end(Buffer.from(await upstream.arrayBuffer())); return;
+        res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/octet-stream" }); res.end(Buffer.from(await upstream.arrayBuffer()));
+        if (measuringRename) {
+          const timing = renameAPITimings[req.url] ||= { calls: 0, totalMs: 0, maxMs: 0 };
+          const elapsed = Math.round(performance.now() - started); timing.calls++; timing.totalMs += elapsed; timing.maxMs = Math.max(timing.maxMs, elapsed);
+        }
+        return;
       }
       if (req.url === "/" || req.url === "/index.html") { res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(fixtureHTML()); return; }
       if (req.url.startsWith("/assets/")) {
@@ -89,6 +102,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
   const referenceRequests = [];
+  const apiRequests = [];
+  page.on("request", req => { if (req.url().startsWith(testOrigin + "/api/")) apiRequests.push(new URL(req.url()).pathname); });
   page.on("request", req => { if (/\/api\/asset\/(findAssetReferences|relinkAsset)$/.test(req.url())) referenceRequests.push(req.url()); });
   const external = [];
   page.on("request", req => { if (!req.url().startsWith(testOrigin) && !req.url().startsWith("blob:")) external.push(req.url()); });
@@ -160,6 +175,7 @@ try {
   });
   await check("document and image menu hooks expose asynchronously loaded metadata", async () => {
     const before = referenceRequests.length;
+    const metadataStart = apiRequests.length;
     const info = await page.evaluate(async ({ id, assetPath }) => {
       const protyle = { block: { rootID: id }, disabled: false }, labels = [];
       const menu = { addItem(item) { const node = document.createElement('div'); node.className='test-menu'; const label = document.createElement('span'); label.className='b3-menu__label'; label.textContent=item.label;node.append(label);document.body.append(node);item.bind?.(node);labels.push({item,node}); } };
@@ -173,6 +189,7 @@ try {
     assert.equal(info.breadcrumb, false); assert.equal(info.labels.filter(label => label.includes("Document attachment total:")).length, 2);
     assert(info.labels.some(label => label.includes("512 × 384"))); assert(info.labels.includes("Quick compress"));
     assert.equal(referenceRequests.length, before, "menu metadata must not scan workspace references");
+    assert.equal(apiRequests.slice(metadataStart).filter(endpoint => endpoint.endsWith("getBlockInfo")).length, 1, "concurrent menus must share document totals");
   });
   await check("offline WASM worker compresses WebP with alpha", async () => {
     const before = referenceRequests.length;
@@ -200,15 +217,17 @@ try {
     const hiddenPath = "assets/database-only-20261016000108-rich001.png";
     await put("/data/" + hiddenPath, new Uint8Array(source));
     const database = JSON.parse(original);
-    database.keyValues.push({ key: { id: "20261016000109-richkey", name: "Hidden rich text", type: "text" }, values: [
-      { id: "20261016000110-richval", keyID: "20261016000109-richkey", type: "text", text: { content: "Hidden link", rich: { spec: 1, format: "kramdown", content: `[Hidden link](${hiddenPath})` } } },
-    ] });
+    database.keyValues.push({ key: { id: "20261016000109-richkey", name: "Hidden rich text", type: "text" }, values: Array.from({ length: 200 }, (_, i) => (
+      { id: `20261016000110-${i.toString(36).padStart(7, "0")}`, keyID: "20261016000109-richkey", type: "text", text: { content: "Hidden link", rich: { spec: 1, format: "kramdown", content: i < 100 ? "ordinary text" : `[Hidden link](${hiddenPath})` } } }
+    )) });
     try {
       await put(avPath, new TextEncoder().encode(JSON.stringify(database)));
+      const metadataStart = apiRequests.length;
       await page.getByRole("button", { name: "Scan current document", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready", { timeout: 30000 });
       assert.equal(await page.locator(`tbody tr[data-asset-path="${hiddenPath}"]`).count(), 1);
       assert.equal(referenceRequests.length, before);
+      assert.equal(apiRequests.slice(metadataStart).filter(endpoint => endpoint.endsWith("md2html")).length, 1, "plain text and repeated rich text must not trigger repeated conversions");
     } finally {
       await put(avPath, original);
       await page.getByRole("button", { name: "Scan current document", exact: true }).click();
@@ -405,6 +424,132 @@ try {
       assert.equal(restored.jobs.length, latest.jobs.length);
     } finally { await windowContext.close(); }
   });
+  await check("118 images rename through four workspace requests, including closed-notebook shared references", async () => {
+    await page.bringToFront();
+    messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/en_US.json"), "utf8"));
+    const bytes = new Uint8Array(await page.evaluate(async () => {
+      const canvas = document.createElement("canvas"); canvas.width = 16; canvas.height = 12;
+      canvas.getContext("2d").fillRect(0, 0, 16, 12);
+      return Array.from(new Uint8Array(await (await new Promise(resolve => canvas.toBlob(resolve, "image/png"))).arrayBuffer()));
+    }));
+    const paths = Array.from({ length: 118 }, (_, i) => `assets/batch-${i}-20261113000100-${i.toString(36).padStart(7, "0")}.png`);
+    for (const asset of paths) await put("/data/" + asset, bytes);
+    const markdown = paths.map(asset => `![batch](${asset})`).join("\n\n");
+    activeId = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: "/118 image batch", markdown });
+    const closedBook = batchBook;
+    const sharedId = await api("/api/filetree/createDocWithMd", { notebook: closedBook, path: "/Shared batch", markdown });
+    await api("/api/notebook/closeNotebook", { notebook: closedBook });
+    const scanStarted = performance.now(), scanRequestStart = apiRequests.length;
+    await page.reload(); await page.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready", { timeout: 30000 });
+    const scanRequests = apiRequests.slice(scanRequestStart);
+    assert(!scanRequests.some(endpoint => /readDir|findAssetReferences|relinkAsset/.test(endpoint)));
+    metrics.scan118 = { elapsedMs: Math.round(performance.now() - scanStarted), images: 118, directoryRequests: 0, workspaceReferenceRequests: 0, statRequests: scanRequests.filter(endpoint => endpoint.endsWith("statAsset")).length, pathRequests: scanRequests.filter(endpoint => endpoint.endsWith("resolveAssetPath")).length };
+    assert.equal(metrics.scan118.statRequests, 118); assert.equal(metrics.scan118.pathRequests, 118);
+    console.log("118-image scan: " + JSON.stringify(metrics.scan118));
+    await page.getByRole("tab", { name: "Image renaming", exact: true }).click();
+    assert.equal(await page.locator("tbody tr").count(), 118);
+    const requestStart = referenceRequests.length, started = performance.now(); measuringRename = true;
+    await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Completed", undefined, { timeout: 120000 });
+    await page.getByRole("button", { name: "Scan current document", exact: true }).waitFor({ state: "visible" });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 });
+    const elapsedMs = Math.round(performance.now() - started), requests = referenceRequests.length - requestStart; measuringRename = false;
+    const job = (await readJournal()).jobs[0];
+    assert.equal(job.items.length, 118); assert.equal(job.state, "completed");
+    assert(job.items.every(item => item.state === "completed" && item.after.some(ref => ref.rootID === sharedId)));
+    assert.equal(requests, 4);
+    const verified = await api("/api/asset/findAssetReferences", { paths: job.items.flatMap(item => [item.oldPath, item.newPath]) });
+    assert.equal(verified.items.length, 236); assert(verified.items.every(item => item.ok));
+    for (const item of job.items) {
+      assert.equal(verified.items.find(result => result.oldPath === item.oldPath).references.length, 0);
+      assert.equal(verified.items.find(result => result.oldPath === item.newPath).references.length, 2);
+      for (const asset of [item.oldPath, item.newPath]) assert.deepEqual(fs.readFileSync(path.join(workspace, "data", asset)), Buffer.from(bytes));
+    }
+    assert((await api("/api/notebook/lsNotebooks")).notebooks.find(book => book.id === closedBook).closed);
+    metrics.rename118 = { elapsedMs, workspaceRequests: requests, images: 118, bytesPerImage: bytes.length, sharedReferences: 236, apiTimings: renameAPITimings };
+    console.log("118-image rename: " + JSON.stringify(metrics.rename118));
+    const restoreStart = referenceRequests.length, restoreStarted = performance.now(); renameAPITimings = {}; measuringRename = true;
+    const history = page.locator(".syic-history > details").first(); await history.locator("summary").click();
+    await history.getByRole("button", { name: "Restore matching references", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", undefined, { timeout: 120000 });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 });
+    measuringRename = false;
+    assert.equal(referenceRequests.length - restoreStart, 4);
+    const restored = (await readJournal()).jobs[0]; assert.equal(restored.state, "restored"); assert(restored.items.every(item => item.state === "restored"));
+    metrics.restore118 = { elapsedMs: Math.round(performance.now() - restoreStarted), workspaceRequests: 4, images: 118, apiTimings: renameAPITimings };
+    console.log("118-image restore: " + JSON.stringify(metrics.restore118));
+  });
+  await check("118 images compress and recover with four workspace requests per bounded batch", async () => {
+    await page.getByRole("tab", { name: "Image compression", exact: true }).click();
+    await page.getByLabel("Preset", { exact: true }).selectOption("82");
+    await page.getByLabel("Output format", { exact: true }).selectOption("webp");
+    await page.getByLabel("Resize mode", { exact: true }).selectOption("original");
+    assert.equal(await page.locator("tbody tr").count(), 118);
+    const start = referenceRequests.length, started = performance.now(); renameAPITimings = {}; measuringRename = true;
+    await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), undefined, { timeout: 180000 });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 }); measuringRename = false;
+    const job = (await readJournal()).jobs[0]; assert.equal(job.kind, "compress"); assert.equal(job.items.length, 118);
+    assert(job.items.every(item => item.state === "completed" && item.resultSize < item.originalSize && item.after.length === 2));
+    assert.equal(referenceRequests.length - start, 4); assert.equal(renameAPITimings["/api/file/putFile"].calls, 123);
+    metrics.compress118 = { elapsedMs: Math.round(performance.now() - started), workspaceRequests: 4, journalWrites: 5, images: 118, sourceBytes: job.items.reduce((sum, item) => sum + item.originalSize, 0), outputBytes: job.items.reduce((sum, item) => sum + item.resultSize, 0), apiTimings: renameAPITimings };
+    console.log("118-image compression: " + JSON.stringify(metrics.compress118));
+    const restoreStart = referenceRequests.length;
+    const history = page.locator(".syic-history > details").first(); await history.locator("summary").click();
+    await history.getByRole("button", { name: "Restore matching references", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", undefined, { timeout: 120000 });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 });
+    assert.equal(referenceRequests.length - restoreStart, 4);
+    assert.equal((await readJournal()).jobs[0].state, "restored");
+  });
+  await check("native document scans resolve encoded notebook-local assets and retain rename recovery", async () => {
+    const name = "本地 %-20261113000500-local01.png", asset = "assets/" + name;
+    // Existing attachments may contain characters rejected by current uploads.
+    // Seed this legacy filename only inside the isolated fixture workspace.
+    const localFile = path.join(workspace, "data", bookA, asset);
+    fs.mkdirSync(path.dirname(localFile), { recursive: true }); fs.writeFileSync(localFile, Buffer.from(source));
+    activeId = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: "/Local encoded attachment", markdown: `![local](${asset.split("/").map(encodeURIComponent).join("/")})` });
+    const requestStart = apiRequests.length;
+    await page.reload(); await page.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready");
+    assert.equal(await page.locator("tbody tr").count(), 1);
+    assert.equal(await page.locator("tbody input[type=checkbox]").isEnabled(), true);
+    assert(!apiRequests.slice(requestStart).some(endpoint => /readDir|findAssetReferences|relinkAsset/.test(endpoint)));
+    await page.getByRole("tab", { name: "Image renaming", exact: true }).click();
+    await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Completed");
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled();
+    const job = (await readJournal()).jobs[0];
+    assert.equal(job.items[0].state, "completed");
+    assert(job.items[0].oldDiskPath.replaceAll("\\", "/").endsWith(`/data/${bookA}/${asset}`));
+    assert.deepEqual(fs.readFileSync(path.join(workspace, "data", bookA, asset)), Buffer.from(source));
+    await page.locator(".syic-history > details").first().locator("summary").first().click();
+    await page.getByRole("button", { name: "Restore matching references", exact: true }).first().click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored");
+    assert.equal((await readJournal()).jobs[0].state, "restored");
+    assert((await api("/api/asset/findAssetReferences", { path: asset.split("/").map(encodeURIComponent).join("/") })).references.some(ref => ref.rootID === activeId));
+  });
+  await check("fast browsing still blocks ambiguous attachments before copying or migrating references", async () => {
+    const asset = "assets/duplicate-20261113000600-dupe001.png";
+    await put("/data/" + asset, new Uint8Array(source));
+    await put(`/data/${bookA}/${asset}`, new Uint8Array(source));
+    activeId = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: "/Ambiguous attachment", markdown: `![duplicate](${asset})` });
+    const requestStart = apiRequests.length;
+    await page.reload(); await page.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready");
+    assert(!apiRequests.slice(requestStart).some(endpoint => /readDir|findAssetReferences|relinkAsset/.test(endpoint)));
+    await page.getByRole("tab", { name: "Image renaming", exact: true }).click();
+    const target = "assets/" + await page.locator(".syic-rename-target").textContent();
+    const mutationStart = referenceRequests.length;
+    await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.classList.contains("syic-error"));
+    assert((await page.locator(".syic-status").textContent()).includes("ambiguous"));
+    assert(!fs.existsSync(path.join(workspace, "data", target)));
+    assert(!referenceRequests.slice(mutationStart).some(url => url.endsWith("relinkAsset")));
+    assert.deepEqual(fs.readFileSync(path.join(workspace, "data", asset)), Buffer.from(source));
+    assert.deepEqual(fs.readFileSync(path.join(workspace, "data", bookA, asset)), Buffer.from(source));
+  });
   if (process.env.SYIC_GENERATE_GUIDE === "1") {
     const languages = (process.env.SYIC_GUIDE_LANGUAGE || "zh_CN,en_US").split(",");
     assert(languages.every(language => ["zh_CN", "en_US"].includes(language)), "Unsupported guide language");
@@ -415,10 +560,11 @@ try {
     }
   }
   assert.deepEqual(pageErrors, []); assert.deepEqual(external, []);
-  fs.writeFileSync(path.join(testRoot, "result.json"), JSON.stringify({ version, results, pageErrors, external, workspace }, null, 2));
-  fs.writeFileSync(path.join(root, ".cache", process.env.SYIC_GUIDE_ONLY === "1" ? "last-guide.json" : "last-integration.json"), JSON.stringify({ testRoot, version, results }, null, 2));
+  fs.writeFileSync(path.join(testRoot, "result.json"), JSON.stringify({ version, results, metrics, pageErrors, external, workspace }, null, 2));
+  fs.writeFileSync(path.join(root, ".cache", process.env.SYIC_GUIDE_ONLY === "1" ? "last-guide.json" : "last-integration.json"), JSON.stringify({ testRoot, version, results, metrics }, null, 2));
   console.log(process.env.SYIC_GUIDE_ONLY === "1" ? `Guide capture complete. Evidence: ${testRoot}` : `All ${results.length} integration checks passed. Evidence: ${testRoot}`);
 } catch (error) {
+  if (measuringRename) console.error("Rename API timings: " + JSON.stringify(renameAPITimings));
   console.error(error); if (browser) for (const context of browser.contexts()) for (const page of context.pages()) {
     try { console.error((await page.locator(".syic-status").textContent()) || ""); await page.screenshot({ path: path.join(testRoot, "failure.png"), fullPage: true }); } catch {}
   }

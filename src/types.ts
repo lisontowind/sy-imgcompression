@@ -47,6 +47,7 @@ export interface Progress { done: number; total: number; path: string; stage: st
 export interface DirectoryEntry { name: string; isDir: boolean; isSymlink?: boolean; updated: number }
 export interface Kernel {
   post<T>(endpoint: string, body: unknown, signal?: AbortSignal): Promise<T>;
+  fileExists?(path: string): Promise<boolean>;
   readFile(path: string, signal?: AbortSignal): Promise<ArrayBuffer>;
   putFile(path: string, bytes: ArrayBuffer): Promise<void>;
 }

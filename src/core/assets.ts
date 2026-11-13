@@ -1,53 +1,17 @@
 import { readJSON } from "../api";
-import { AssetIdentity, AttachmentStats, DirectoryEntry, DocumentAssets, Kernel, Notebook, UserError } from "../types";
-import { basename, extensionOf, normalizeAssetURL } from "./paths";
+import { AssetIdentity, AttachmentStats, DocumentAssets, Kernel, Notebook, UserError } from "../types";
+import { assetDiskPath, basename, extensionOf, normalizeAssetURL } from "./paths";
 import { databaseSourcePaths, databaseViewPaths } from "./database-order";
 import { documentSourceInventory, SourceNode } from "./document-source";
 import { checkCancelled } from "./cancellation";
+import { ReadPool } from "./read-pool";
 
 const nodeId = /^\d{14}-[a-z0-9]{7}$/;
-export async function inventoryAssets(kernel: Kernel, targets: Set<string>, signal?: AbortSignal): Promise<Map<string, string[]>> {
-  const result = new Map<string, string[]>();
-  const read = async (path: string) => {
-    checkCancelled(signal);
-    const entries = await kernel.post<DirectoryEntry[]>("/api/file/readDir", { path }, signal);
-    checkCancelled(signal); return entries;
-  };
-  const assets = async (disk: string, relative: string): Promise<void> => {
-    for (const entry of await read(disk)) {
-      checkCancelled(signal);
-      const path = relative + "/" + entry.name;
-      if (entry.isSymlink) throw new UserError("unsafeSymlink", disk + "/" + entry.name);
-      if (entry.isDir) await assets(disk + "/" + entry.name, path);
-      else if (targets.has(path)) result.set(path, [...(result.get(path) || []), disk + "/" + entry.name]);
-    }
-  };
-  const notebook = async (dir: string): Promise<void> => {
-    for (const entry of await read(dir)) {
-      checkCancelled(signal);
-      if (entry.isSymlink) throw new UserError("unsafeSymlink", dir + "/" + entry.name);
-      if (!entry.isDir) continue;
-      if (entry.name === "assets") await assets(dir + "/assets", "assets");
-      else if (nodeId.test(entry.name)) await notebook(dir + "/" + entry.name);
-    }
-  };
-  for (const entry of await read("/data")) {
-    checkCancelled(signal);
-    if (!entry.isDir) continue;
-    if (entry.isSymlink && (entry.name === "assets" || nodeId.test(entry.name))) throw new UserError("unsafeSymlink", entry.name);
-    if (entry.name === "assets") await assets("/data/assets", "assets");
-    else if (nodeId.test(entry.name)) {
-      const conf = await readJSON<{ encrypted?: boolean }>(kernel, `/data/${entry.name}/.siyuan/conf.json`, signal);
-      if (conf.encrypted) throw new UserError("incompleteScan", entry.name);
-      await notebook("/data/" + entry.name);
-    }
-  }
-  return result;
-}
+const menuStats = new WeakMap<Kernel, ReadPool>();
 
 export function orderedPaths(dom: string, titleImage: string, all: string[]): string[] {
-  const ordered: string[] = [];
-  const add = (raw: string) => { const p = normalizeAssetURL(raw); if (p && !ordered.includes(p)) ordered.push(p); };
+  const ordered: string[] = [], seen = new Set<string>();
+  const add = (raw: string) => { const p = normalizeAssetURL(raw); if (p && !seen.has(p)) { seen.add(p); ordered.push(p); } };
   for (const match of titleImage.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) add(match[1].trim());
   const doc = new DOMParser().parseFromString(dom, "text/html");
   // Only the document's own BlockDOM is requested; embeds are not expanded.
@@ -68,52 +32,72 @@ export async function documentInventory(kernel: Kernel, id: string, signal?: Abo
   checkCancelled(signal);
   if (!nodeId.test(info?.box) || !info.path?.startsWith("/") || info.path.split("/").includes("..")) throw new UserError("readFailed", id);
   const source = documentSourceInventory(await readJSON<SourceNode>(kernel, `/data/${info.box}${info.path}`, signal), id);
+  // Rendering can materialize database metadata; read its source afterward.
   const dbPaths = await databaseViewPaths(kernel, source.databaseDOM, signal);
-  const paths = [...source.paths];
   const supplemental = await databaseSourcePaths(kernel, source.databaseIds, signal);
-  for (const path of [...dbPaths, ...supplemental]) if (!paths.includes(path)) paths.push(path);
+  const paths = [...new Set([...source.paths, ...dbPaths, ...supplemental])];
   return { id, title: source.title, notebooks, paths };
 }
 
-export async function attachmentStats(kernel: Kernel, paths: string[], signal?: AbortSignal): Promise<{ stats: AttachmentStats; sizes: Map<string, number> }> {
+export async function attachmentStats(kernel: Kernel, paths: string[], signal?: AbortSignal, progress?: (path: string) => void): Promise<{ stats: AttachmentStats; sizes: Map<string, number>; deferred: Set<string> }> {
   checkCancelled(signal);
-  const unique = [...new Set(paths)], sizes = new Map<string, number>();
+  const unique = [...new Set(paths)], sizes = new Map<string, number>(), deferred = new Set<string>();
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(6, unique.length) }, async () => {
     while (cursor < unique.length) {
       checkCancelled(signal);
       const path = unique[cursor++];
+      progress?.(path);
       try {
-        const stat = await kernel.post<{ size: number }>("/api/asset/statAsset", { path }, signal);
+        const stat = await kernel.post<{ size: number; downloaded?: false }>("/api/asset/statAsset", { path }, signal);
         checkCancelled(signal);
         if (Number.isSafeInteger(stat?.size) && stat.size >= 0) sizes.set(path, stat.size);
+        if (stat?.downloaded === false) deferred.add(path);
       } catch { checkCancelled(signal); /* Show partial totals explicitly. */ }
     }
   }));
-  return { stats: { bytes: [...sizes.values()].reduce((sum, size) => sum + size, 0), unknown: unique.length - sizes.size, count: unique.length }, sizes };
+  return { stats: { bytes: [...sizes.values()].reduce((sum, size) => sum + size, 0), unknown: unique.length - sizes.size, count: unique.length }, sizes, deferred };
 }
-export async function documentStats(kernel: Kernel, id: string): Promise<AttachmentStats> {
-  return (await attachmentStats(kernel, (await documentInventory(kernel, id)).paths)).stats;
+export async function documentStats(kernel: Kernel, id: string, signal?: AbortSignal): Promise<AttachmentStats> {
+  let reads = menuStats.get(kernel);
+  if (!reads) { reads = new ReadPool(); menuStats.set(kernel, reads); }
+  return reads.run(id, async current => (await attachmentStats(kernel, (await documentInventory(kernel, id, current)).paths, current)).stats, signal);
 }
 
-export async function scanDocument(kernel: Kernel, id: string, onlyPath?: string, progress?: (path: string) => void, signal?: AbortSignal): Promise<DocumentAssets> {
+export async function scanDocument(kernel: Kernel, id: string, onlyPath?: string, progress?: (path: string) => void, signal?: AbortSignal, wholeDocumentStats = true): Promise<DocumentAssets> {
   const { title, notebooks, paths } = await documentInventory(kernel, id, signal);
   const selectedPath = onlyPath ? normalizeAssetURL(onlyPath) : undefined;
   if (onlyPath && !selectedPath) throw new UserError("invalidAssetPath", onlyPath);
   const chosen = selectedPath ? paths.filter(p => p === selectedPath) : paths;
   if (onlyPath && !chosen.length) throw new UserError("sourceChanged");
-  const { stats, sizes } = await attachmentStats(kernel, paths, signal);
+  const { stats, sizes, deferred } = await attachmentStats(kernel, wholeDocumentStats ? paths : chosen, signal, progress);
   if (!chosen.length) return { id, title, notebooks, assets: [], stats };
-  const inventory = await inventoryAssets(kernel, new Set(chosen), signal);
+  // Browsing only needs the kernel's resolved path for this document's files.
+  // Cross-workspace ambiguity, symlinks and completeness are checked by the
+  // fresh native reference preflight before any job writes an attachment.
+  const locations = new Map<string, string>();
+  const local = chosen.filter(path => sizes.has(path) && !deferred.has(path));
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(6, local.length) }, async () => {
+    while (cursor < local.length) {
+      checkCancelled(signal);
+      const path = local[cursor++]; progress?.(path);
+      try {
+        const diskPath = await kernel.post<string>("/api/asset/resolveAssetPath", { path }, signal);
+        checkCancelled(signal);
+        const localPath = typeof diskPath === "string" ? assetDiskPath(diskPath, path) : undefined;
+        if (localPath) locations.set(path, localPath);
+      } catch { checkCancelled(signal); /* An unresolved file remains blocked. */ }
+    }
+  }));
   const assets: AssetIdentity[] = [];
   for (const path of chosen) {
     checkCancelled(signal);
     progress?.(path);
-    const candidates = inventory.get(path) || [];
-    const asset: AssetIdentity = { path, diskPath: candidates[0] || "", name: basename(path), extension: extensionOf(path),
+    const asset: AssetIdentity = { path, diskPath: locations.get(path) || "", name: basename(path), extension: extensionOf(path),
       size: sizes.get(path) ?? 0, sizeKnown: sizes.has(path), references: [], referencesLoaded: false, blockers: [], selected: true, order: assets.length };
-    if (candidates.length !== 1) asset.blockers.push(candidates.length ? "ambiguousAsset" : "missingLocalAsset");
-    if (!asset.sizeKnown) asset.blockers.push("readFailed");
+    if (deferred.has(path)) asset.blockers.push("missingLocalAsset");
+    else if (!asset.diskPath) asset.blockers.push("readFailed");
     asset.selected = !asset.blockers.length; assets.push(asset);
   }
   return { id, title, notebooks, assets, stats };

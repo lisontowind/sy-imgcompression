@@ -4,6 +4,7 @@ import { AssetIdentity, AssetReference, CompressionOptions, CompressionResult, D
 import { expectedAfter } from "../src/core/references";
 import { png, ref, report } from "./fixtures";
 import { MAX_BYTES } from "../src/compression/image-info";
+import { KernelError } from "../src/api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -18,7 +19,10 @@ class FakeKernel implements Kernel {
   async post<T>(endpoint: string, body: unknown): Promise<T> {
     const input = body as Record<string, string | boolean>;
     if (endpoint.endsWith("readDir")) return [...this.files.keys()].filter(path => path.startsWith(input.path + "/")).map(path => ({ name: path.split("/").pop(), isDir: false })) as T;
-    if (endpoint.endsWith("findAssetReferences")) return report(structuredClone(this.refs.get(decodeURI(input.path as string)) || [])) as T;
+    if (endpoint.endsWith("findAssetReferences")) {
+      if ("paths" in input) throw new KernelError(endpoint, undefined, "[path] is required");
+      return report(structuredClone(this.refs.get(decodeURI(input.path as string)) || [])) as T;
+    }
     if (endpoint.endsWith("copyFile")) { await this.putFile(input.dest as string, await this.readFile(input.src as string)); return undefined as T; }
     if (endpoint.endsWith("relinkAsset")) {
       const oldPath = decodeURI(input.oldPath as string), newPath = decodeURI(input.newPath as string);
