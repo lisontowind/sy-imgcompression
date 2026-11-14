@@ -2,15 +2,15 @@
   "name": "sy-imgcompression",
   "author": "Lisontowind",
   "url": "https://github.com/lisontowind/sy-imgcompression",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "minAppVersion": "3.8.5",
   "backends": ["windows", "linux", "darwin"],
   "frontends": ["desktop", "desktop-window"],
   "disabledInPublish": true,
   "displayName": { "default": "Image Compression", "zh-CN": "图片压缩" },
   "description": {
-    "default": "Offline image compression with per-image settings, quick compression, attachment totals and simplified image filenames.",
-    "zh-CN": "本地离线压缩图片，支持逐图配置、快捷压缩、附件大小统计与图片名称简化，同步更新共享引用。"
+    "default": "Offline in-place image compression, verified backups, task recovery and cleanup, per-image settings and image renaming.",
+    "zh-CN": "本地离线原位压缩图片，保留原格式，支持备份恢复与历史清理、逐图配置、快捷压缩和图片重命名。"
   },
   "readme": { "default": "README.md", "zh-CN": "README.zh-CN.md" },
   "icon": "icon.png",

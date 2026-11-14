@@ -32,3 +32,11 @@ it("keeps persisted quick/global profiles independent and rejects invalid settin
   const draft = cloneProfile(copy.quick); draft.options.quality = 10; expect(copy.quick.options.quality).toBe(82);
   expect(loadSettings({ schema: 1, quick: { preset: "custom", options: { quality: -1 } } }).quick).toEqual(defaultProfile());
 });
+it("migrates WebP output settings to original-format compression and locks the format control", () => {
+  const settings = loadSettings(undefined); settings.quick.options.format = "webp";
+  const loaded = loadSettings(settings); expect(loaded.quick.options.format).toBe("original");
+  const root = document.createElement("div"); profileEditor(root, loaded.quick, t, () => {});
+  const format = root.querySelector<HTMLSelectElement>('[aria-label="Output format"]')!;
+  expect(format.value).toBe("original"); expect(format.disabled).toBe(true);
+  expect(root.textContent).toContain("Every reference to the same file");
+});

@@ -1,6 +1,6 @@
 import { fileExists } from "../api";
 import { CompressionClient } from "../compression/client";
-import { inspectImage, MAX_BYTES, validateCompression } from "../compression/image-info";
+import { MAX_BYTES, validateCompression } from "../compression/image-info";
 import { AssetIdentity, AssetJob, CompressionOptions, CompressionResult, DocumentAssets, JobItem, JobKind, Journal, Kernel, Progress, RenameOptions, UserError } from "../types";
 import { imageRename, newNodeId, validateFilename } from "./naming";
 import { basename, isImageAttachment, isImageExtension } from "./paths";
@@ -8,14 +8,16 @@ import { cloneOptions } from "./settings";
 import { assertNoUnexpectedReferences, digest, expectedAfter, findReferences, referenceFingerprint, relink } from "./references";
 import { renameBatch } from "./rename-batch";
 import { BatchContext } from "./batch-operations";
-import { BATCH_FILES, compressBatch, PreparedCompression } from "./compress-batch";
+import { compressFiles, restoreFile } from "./compress-files";
 import { restoreBatch } from "./restore-batch";
 import { checkCancelled as checkSignal } from "./cancellation";
+import { deleteBackup, planHistoryDeletion } from "./delete-history";
 
 export interface JournalStore { load(): Promise<Journal | undefined>; save(journal: Journal): Promise<void> }
 export interface Compressor { compress(bytes: ArrayBuffer, options: CompressionOptions): Promise<CompressionResult>; cancel(): void }
-export const DEFAULT_COMPRESSION: CompressionOptions = { quality: 82, format: "webp", maxWidth: 0, maxHeight: 0 };
+export const DEFAULT_COMPRESSION: CompressionOptions = { quality: 82, format: "original", maxWidth: 0, maxHeight: 0 };
 export const DEFAULT_RENAME: RenameOptions = { documentNameMaxBytes: 24 };
+const BATCH_FILES = 128;
 
 export function assignRenamePaths(assets: AssetIdentity[], _title: string, options: RenameOptions): void {
   for (const asset of assets) {
@@ -68,7 +70,7 @@ export class JobManager {
       this.checkCancelled();
       asset.previewDigest = await digest(source);
       this.checkCancelled();
-      const result = await this.compressor.compress(source.slice(0), options);
+      const result = await this.compressor.compress(source.slice(0), { ...cloneOptions(options), format: "original" });
       this.checkCancelled();
       return { source, result };
     } finally { this.previewController = undefined; this.busy = false; }
@@ -88,17 +90,24 @@ export class JobManager {
       if (kind === "rename") assignRenamePaths(document.assets, document.title, options as RenameOptions);
       const assets = document.assets.filter(asset => asset.selected && !asset.blockers.length && (kind === "compress" ? isImageExtension(asset.extension) : isImageAttachment(asset.extension) && asset.newPath !== asset.path));
       if (!assets.length) throw new UserError(kind === "rename" ? "noChanges" : "selectAssets");
-      const effective = new Map(assets.map(asset => [asset.path, kind === "compress" ? cloneOptions(perImage.get(asset.path) || options as CompressionOptions) : undefined]));
+      const effective = new Map(assets.map(asset => [asset.path, kind === "compress" ? { ...cloneOptions(perImage.get(asset.path) || options as CompressionOptions), format: "original" as const } : undefined]));
       for (const value of effective.values()) if (value) validateCompression(value);
       const job: AssetJob = { schema: 1, id: newNodeId(), kind, documentId: document.id, documentTitle: document.title,
-        created: new Date().toISOString(), state: "running", options: kind === "compress" ? cloneOptions(options as CompressionOptions) : { ...options },
-        items: assets.map(asset => ({ oldPath: asset.path, newPath: asset.newPath || "", oldDiskPath: asset.diskPath,
-          newDiskPath: "", state: "pending", before: [], plannedAfter: [], originalSize: asset.size,
-          ...(kind === "compress" ? { compressionOptions: effective.get(asset.path) } : {}) })) };
+        created: new Date().toISOString(), state: "running", options: kind === "compress" ? { ...cloneOptions(options as CompressionOptions), format: "original" } : { ...options },
+        items: assets.map(asset => ({ oldPath: asset.path, newPath: kind === "compress" ? asset.path : asset.newPath || "", oldDiskPath: asset.diskPath,
+          newDiskPath: kind === "compress" ? asset.diskPath : "", state: "pending", before: [], plannedAfter: [], originalSize: asset.size,
+          ...(kind === "compress" ? { operation: "replace-file" as const, compressionOptions: effective.get(asset.path) } : {}) })) };
       this.journal.jobs.unshift(job); await this.save();
       let done = 0;
-      let cached = new Map<string, PreparedCompression>();
       try {
+        if (kind === "compress") {
+          await compressFiles(this.kernel, job, assets, {
+            save: () => this.save(), checkCancelled: () => this.checkCancelled(),
+            readSource: asset => this.readSource(asset, true), encode: (source, settings) => this.compressor.compress(source, settings),
+            progress: progress => this.onProgress?.(progress), signal: this.jobController?.signal,
+          });
+          job.state = "completed"; return job;
+        }
         const batch: BatchContext = {
           save: () => this.save(), checkCancelled: () => this.checkCancelled(),
           restore: items => this.restoreItems(items, true), readSource: asset => this.readSource(asset), signal: this.jobController?.signal,
@@ -107,48 +116,25 @@ export class JobManager {
         if (kind === "rename" && assets.length > 1 && await renameBatch(this.kernel, job, assets, batch)) {
           done = assets.length; job.state = "completed"; return job;
         }
-        if (kind === "compress" && assets.length > 1) {
-          const result = await compressBatch(this.kernel, job, assets, { ...batch, prepare: async (asset, item) => {
-            const source = await this.readSource(asset, true);
-            item.sourceDigest = await digest(source); this.checkCancelled();
-            if (asset.previewDigest && item.sourceDigest !== asset.previewDigest) throw new UserError("sourceChanged", asset.path);
-            inspectImage(source);
-            const result = await this.compressor.compress(source.slice(0), cloneOptions(item.compressionOptions!));
-            this.checkCancelled(); return result;
-          } });
-          if (result.handled) { done = assets.length; job.state = "completed"; return job; }
-          cached = result.cached;
-        }
         for (let index = 0; index < assets.length; index++) {
           const asset = assets[index], item = job.items[index];
           if (item.state === "skipped") { done++; continue; }
           this.checkCancelled();
           this.onProgress?.({ done, total: assets.length, path: asset.path, stage: "preparing" });
           try {
-            if (kind === "rename" && (await fileExists(this.kernel, "/data/" + item.newPath) || job.items.some(other => other !== item && other.newPath.toLowerCase() === item.newPath.toLowerCase()))) {
+            if (await fileExists(this.kernel, "/data/" + item.newPath) || job.items.some(other => other !== item && other.newPath.toLowerCase() === item.newPath.toLowerCase())) {
               item.state = "skipped"; item.error = "filenameConflict"; await this.save(); done++; continue;
             }
-            const source = await this.readSource(asset, kind === "compress");
+            const source = await this.readSource(asset);
             item.sourceDigest = await digest(source);
             if (asset.previewDigest && item.sourceDigest !== asset.previewDigest) throw new UserError("sourceChanged", asset.path);
             this.checkCancelled();
-            let output: ArrayBuffer | undefined;
-            if (kind === "compress") {
-              if (source.byteLength > MAX_BYTES) throw new UserError("imageTooLarge");
-              inspectImage(source);
-              const prepared = cached.get(asset.path);
-              if (prepared && prepared.sourceDigest !== item.sourceDigest) throw new UserError("sourceChanged", asset.path);
-              const result = prepared?.result || await this.compressor.compress(source.slice(0), cloneOptions(item.compressionOptions!));
-              cached.delete(asset.path);
-              item.resultSize = result.bytes.byteLength;
-              if (result.bytes.byteLength >= source.byteLength) { item.state = "skipped"; item.error = "noSavings"; await this.save(); done++; continue; }
-              output = result.bytes;
-              item.newPath = `assets/image-${newNodeId()}${result.extension}`;
-            } else item.resultSize = source.byteLength;
+            item.resultSize = source.byteLength;
             validateFilename(basename(item.newPath));
             item.newDiskPath = "/data/" + item.newPath;
             // Browsing and previews defer workspace lookups. Establish a fresh
             // baseline only for an attachment that will actually be changed.
+            this.onProgress?.({ done, total: assets.length, path: asset.path, stage: "scanningReferences" });
             const current = await findReferences(this.kernel, asset.path, this.jobController?.signal);
             if (!current.references.length) throw new UserError("noReferences", asset.path);
             if (asset.referencesLoaded !== false && referenceFingerprint(current.references) !== referenceFingerprint(asset.references)) throw new UserError("sourceChanged", asset.path);
@@ -157,12 +143,13 @@ export class JobManager {
             // Check again immediately before writing; never overwrite an existing file.
             if (await fileExists(this.kernel, item.newDiskPath)) throw new UserError("filenameConflict", item.newPath);
             if (item.oldPath === item.newPath) throw new UserError("filenameConflict", item.newPath);
-            item.targetDigest = output ? await digest(output) : item.sourceDigest;
+            item.targetDigest = item.sourceDigest;
             item.state = "prepared"; await this.save();
             this.checkCancelled();
-            await this.kernel.putFile(item.newDiskPath, output || source);
+            await this.kernel.putFile(item.newDiskPath, source);
             if (await digest(await this.kernel.readFile(item.oldDiskPath, this.jobController?.signal)) !== item.sourceDigest) throw new UserError("sourceChanged", item.oldPath);
             if (await digest(await this.kernel.readFile(item.newDiskPath, this.jobController?.signal)) !== item.targetDigest) throw new UserError("writeVerificationFailed");
+            this.onProgress?.({ done, total: assets.length, path: asset.path, stage: "checkingMigration" });
             const dry = await relink(this.kernel, item.oldPath, item.newPath, true, this.jobController?.signal);
             if (referenceFingerprint(dry.references) !== referenceFingerprint(item.before)) throw new UserError("sourceChanged", item.oldPath);
             item.plannedAfter = expectedAfter(dry.references, item.oldPath, item.newPath);
@@ -172,6 +159,7 @@ export class JobManager {
             // Do not abort a mutation request: its result must be verified before retry or recovery.
             const applied = await relink(this.kernel, item.oldPath, item.newPath, false);
             item.historyPath = applied.historyPath;
+            this.onProgress?.({ done, total: assets.length, path: asset.path, stage: "verifyingReferences" });
             const [remaining, after] = await Promise.all([findReferences(this.kernel, item.oldPath), findReferences(this.kernel, item.newPath)]);
             const actual = after.references.filter(ref => !["annotation-file", "ocr"].includes(ref.type));
             const expected = item.plannedAfter.filter(ref => !["annotation-file", "ocr"].includes(ref.type));
@@ -210,13 +198,47 @@ export class JobManager {
     return this.exclusive(async () => {
       const current = this.journal.jobs.find(value => value.id === job.id);
       if (!current) throw new UserError("restoreConflict");
+      if (current.deleting) throw new UserError("historyDeleting");
       job = current;
       await this.restoreItems([...job.items].reverse().filter(item => ["completed", "applying", "recovery-required"].includes(item.state)));
       job.state = "restored"; await this.save();
     });
   }
+  async deleteHistory(ids: readonly string[]): Promise<void> {
+    return this.exclusive(async () => {
+      const selected = new Set(ids), jobs = this.journal.jobs.filter(job => selected.has(job.id));
+      if (!jobs.length) return;
+      if (new Set(this.journal.jobs.map(job => job.id)).size !== this.journal.jobs.length) throw new UserError("invalidJournal");
+      const retained = this.journal.jobs.filter(job => !selected.has(job.id));
+      const paths = await planHistoryDeletion(this.kernel, jobs, retained);
+      this.checkCancelled();
+      // Keep the records until every backup is gone. Persist a marker first so
+      // partial deletion cannot leave a misleading restore button after restart.
+      for (const job of jobs) job.deleting = true;
+      await this.save();
+      for (const [index, path] of paths.entries()) {
+        this.onProgress?.({ done: index, total: paths.length, path, stage: "deletingBackups" });
+        await deleteBackup(this.kernel, path);
+      }
+      const previous = this.journal.jobs;
+      this.journal.jobs = retained;
+      try { await this.save(); }
+      catch (error) { this.journal.jobs = previous; throw error; }
+    });
+  }
   private async restoreItems(items: JobItem[], recovery = false): Promise<void> {
     let firstError: unknown;
+    for (const item of items.filter(item => item.operation === "replace-file")) {
+      if (!recovery) this.checkCancelled();
+      // A repeated recovery recognises an already restored file by its hash.
+      try { await restoreFile(this.kernel, item, recovery ? undefined : this.jobController?.signal); }
+      catch (error) {
+        item.state = "recovery-required"; item.error = String(error); await this.save();
+        if (!recovery) throw error;
+        firstError ??= error;
+      }
+    }
+    items = items.filter(item => item.operation !== "replace-file");
     for (let offset = 0; offset < items.length; offset += BATCH_FILES) {
       const batch = items.slice(offset, offset + BATCH_FILES);
       if (!recovery) this.checkCancelled();

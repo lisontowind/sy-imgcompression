@@ -23,6 +23,8 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   const documentId = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: english ? "/Plugin examples/Product design journal" : "/插件使用示例/产品设计周记", markdown:
     assets.map(([name], index) => `## ${english ? "Image" : "图片"} ${index + 1}\n\n![${name.split("-")[0]}](assets/${name})`).join("\n\n") + `\n\n[${english ? "Project attachment" : "项目附件"}](${pdfPath})` });
   await api("/api/filetree/createDocWithMd", { notebook: bookA, path: english ? "/Plugin examples/Design references" : "/插件使用示例/方案引用", markdown: `![${english ? "Shared cover" : "共用封面"}](assets/${assets[0][0]})` });
+  // Guide languages use independent histories inside this isolated test workspace.
+  await put("/data/storage/petal/sy-imgcompression/jobs.json", new TextEncoder().encode('{"jobs":[]}'));
   setActive(documentId); await page.setViewportSize({ width: 1600, height: 1200 });
   await page.goto(page.url());
   await page.evaluate(async () => { localStorage.removeItem("jobs.json"); localStorage.removeItem("settings.json"); await window.__plugin.onload(); window.__open(); });
@@ -115,10 +117,12 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   await main.getByRole('button', { name: messages.individualSettings, exact: true }).first().click();
   let child = page.locator('.syic-child');
   await child.getByLabel(messages.resizeMode, { exact: true }).selectOption('50');
-  await child.getByLabel(messages.quality, { exact: true }).fill('78'); await child.getByLabel(messages.quality, { exact: true }).blur();
+  if (await child.getByLabel(messages.quality, { exact: true }).isEnabled()) {
+    await child.getByLabel(messages.quality, { exact: true }).fill('78'); await child.getByLabel(messages.quality, { exact: true }).blur();
+  }
   await child.locator('.syic-original').evaluate(image => image.decode());
   await capture({ number: '02', file: '02-individual-settings.png', title: '每张图片，都可以单独设置', subtitle: '不同图片使用不同参数，不必反复拆成多次批量任务。', notes: [
-    ['设置当前图片', '质量、格式、比例或像素限制均可单独调整。示例将封面缩小到 50%。'],
+    ['设置当前图片', '保持原格式，可单独设置质量、比例或像素限制；PNG 使用无损优化。示例将封面缩小到 50%。'],
     ['保存独立配置', '保存后该图片不再继承全局参数。其他未单独设置的图片仍跟随全局配置。'],
     ['核对预计尺寸', '上方显示原尺寸与预计输出尺寸。缩放始终保持比例、不放大；保存后可在列表中恢复继承。'],
   ] }, [child.locator('.syic-profile'), child.getByRole('button', { name: messages.saveSettings, exact: true }), child.locator('.syic-expected')]);
@@ -135,7 +139,7 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   await capture({ number: '03', file: '03-compression-preview.png', title: '先看压缩对比，再决定应用', subtitle: '预览在独立子面板中完成，查看原图本身不会触发压缩。', notes: [
     ['点击才生成预览', '只有点击“生成压缩预览”才运行压缩。调整参数后，需要再次点击重新生成。'],
     ['对比尺寸和体积', '同时查看原图与压缩结果，核对输出尺寸、文件大小以及本次文件缩减量。'],
-    ['预览不会替换引用', '确认效果后，回到主面板点击“应用到选中附件”，才会写入新文件并更新引用。'],
+    ['预览不会写回图片', '确认效果后，回到主面板点击“应用到选中附件”，才会备份并原位写回；不扫描或改写引用。'],
   ] }, [child.getByRole('button', { name: messages.generatePreview, exact: true }), child.locator('.syic-preview-state'), child.locator('.syic-preview figure').last()]);
   await page.evaluate(() => window.__dialogs.at(-1).destroy());
   await revealMain();
@@ -161,21 +165,22 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   child = page.locator('.syic-quick-settings'); await child.getByLabel(messages.resizeMode, { exact: true }).selectOption('75');
   await capture({ number: '05', compact: true, file: '05-quick-compression.png', title: '右键快捷压缩，配置独立保存', subtitle: '先保存常用参数，之后右键点“快捷压缩”即可直接执行。', notes: [
     ['独立的选项框', '图片右键菜单和主面板都能打开“快捷压缩配置”，无需先进入附件列表。'],
-    ['保存常用参数', '这里的设置与批量压缩面板分开保存。示例使用均衡、WebP 和 75% 尺寸。'],
+    ['保存常用参数', '这里的设置与批量压缩面板分开保存。示例使用均衡、保持原格式和 75% 尺寸。'],
     ['选择常用尺寸', '比例和像素限制都保持宽高比。保存后右键“快捷压缩”会直接执行，并写入任务记录。'],
   ] }, [child.locator('.syic-settings-box'), child.getByRole('button', { name: messages.saveSettings, exact: true }), child.getByLabel(messages.resizeMode, { exact: true })]);
   await child.getByRole('button', { name: messages.saveSettings, exact: true }).click();
 
   await page.evaluate(() => window.__open()); await ready();
+  await main.getByLabel(messages.resizeMode, { exact: true }).selectOption('75');
   await main.getByRole('button', { name: messages.apply, exact: true }).click();
-  await page.waitForFunction(() => { const job = JSON.parse(localStorage.getItem('jobs.json') || '{"jobs":[]}').jobs[0]; return job?.state === 'completed' && !document.querySelector('.syic-actions button')?.disabled; }, null, { timeout: 120000 });
+  await page.waitForFunction(completed => document.querySelector('.syic-status')?.textContent?.startsWith(completed) && !document.querySelector('.syic-actions button')?.disabled, messages.completed, { timeout: 120000 });
   const firstJob = main.locator('.syic-history > details').first(); await firstJob.locator('summary').click();
   await frame({ number: '06', title: '', subtitle: '', notes: [] }); await main.evaluate(node => { node.scrollTop = node.scrollHeight; });
-  await capture({ number: '06', file: '06-history-recovery.png', title: '处理有记录，引用可以恢复', subtitle: '原附件保留用于恢复；文件缩减量不等于工作空间立即释放的磁盘空间。', notes: [
+  await capture({ number: '06', file: '06-history-recovery.png', title: '处理有记录，备份可管理', subtitle: '可核验并恢复原图，也可在不再需要恢复时清理备份与历史。', notes: [
     ['核对每项任务结果', '任务记录列出原路径、新路径及完成、跳过或失败状态，便于逐项确认。'],
-    ['恢复仍匹配的引用', '点击恢复按钮前会核验文件及引用。出现后续编辑或新增引用时，会阻止冲突恢复。'],
-    ['原附件不会自动删除', '保留原文件，才能在需要时恢复。确认无需恢复后，可在思源中检查并清理未引用附件。'],
-  ] }, [firstJob.locator('summary'), firstJob.getByRole('button', { name: messages.restore, exact: true }), firstJob.locator('.syic-job-item').first()]);
+    ['恢复原图片文件', '恢复前核验当前图片及备份哈希；图片出现后续编辑时停止，不覆盖新内容。'],
+    ['删除备份与历史', '不再需要恢复时，可删除单条任务或清空全部历史及备份。操作需要确认，当前图片保持不变。'],
+  ] }, [firstJob.locator('summary'), firstJob.getByRole('button', { name: messages.restoreImage, exact: true }), firstJob.getByRole('button', { name: messages.deleteHistory, exact: true })]);
   fs.writeFileSync(path.join(output, 'manifest.json'), JSON.stringify({ source: 'Production plugin + isolated SiYuan kernel + browser host adapter; annotations added in the capture page.', language, documentId, images: manifest }, null, 2));
   assert.equal(manifest.length, 6); console.log('Created all 6 usage illustrations in ' + output);
 }

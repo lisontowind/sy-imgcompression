@@ -19,6 +19,7 @@ export class AttachmentPanel {
   private document?: DocumentAssets;
   private mode: JobKind;
   private working = false;
+  private deletingHistory = false;
   private scanController?: AbortController;
   private disposed = false;
   private profile = defaultProfile();
@@ -64,12 +65,12 @@ export class AttachmentPanel {
   async refreshExternal(): Promise<void> { if (!this.disposed && !this.working && !this.manager.busy) await this.scan(); }
   dispose(): void { this.disposed = true; this.scanController?.abort(); this.releasePreview(); this.manager.onProgress = undefined; this.manager.onChange = undefined; }
   private releasePreview(): void { this.child?.destroy(); this.child = undefined; this.previewChanged = undefined; }
-  private childPanel(title: string): ChildPanel {
+  private childPanel(title: string, size?: { width: string; height: string }): ChildPanel {
     this.releasePreview();
     const panel = new ChildPanel(title, () => {
       if (this.child === panel) { this.child = undefined; this.previewChanged = undefined; }
       if (this.previewRunning) this.manager.cancel();
-    });
+    }, size);
     this.child = panel; return panel;
   }
   private button(label: string, action: () => void | Promise<void>): HTMLButtonElement {
@@ -274,7 +275,7 @@ export class AttachmentPanel {
     const selected = this.document.assets.filter(asset => asset.selected && this.available(asset));
     const refs = selected.flatMap(asset => asset.references), books = new Set(refs.map(ref => ref.notebook).filter(Boolean));
     const docs = new Set(refs.map(ref => ref.rootID).filter(Boolean));
-    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", selected.some(asset => asset.referencesLoaded === false) ? this.t("referencesDeferred") : this.t("impact", {
+    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", this.mode === "compress" ? this.t("inPlaceHint") : selected.some(asset => asset.referencesLoaded === false) ? this.t("referencesDeferred") : this.t("impact", {
       refs: refs.length, docs: docs.size, books: books.size, closed: this.document.notebooks.filter(book => book.closed && books.has(book.id)).length,
     })));
     this.updateButtons();
@@ -334,7 +335,7 @@ export class AttachmentPanel {
   private updateButtons(): void {
     if (this.disposed) return;
     const busy = this.working || this.manager.busy;
-    this.scanButton.disabled = busy; this.cancelButton.disabled = !busy;
+    this.scanButton.disabled = busy; this.cancelButton.disabled = !busy || this.deletingHistory;
     this.applyButton.disabled = busy || !!this.root.querySelector("input:invalid") || !this.document?.assets.some(asset => asset.selected && this.available(asset));
     this.controls.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input, select, button").forEach(input => { input.disabled = busy || input.dataset.locked === "true"; });
     this.tabs.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
@@ -346,7 +347,7 @@ export class AttachmentPanel {
       for (const [node, disabled] of this.listDisabled) if (node.isConnected) node.disabled = disabled;
       this.listDisabled.clear();
     }
-    this.history.querySelectorAll<HTMLButtonElement>("button").forEach(node => { node.disabled = busy; });
+    this.history.querySelectorAll<HTMLButtonElement>("button").forEach(node => { node.disabled = busy || (node.classList.contains("syic-clear-history") && !this.manager.journal.jobs.length); });
   }
   private async scan(): Promise<void> {
     if (this.working || this.manager.busy) return;
@@ -467,8 +468,39 @@ export class AttachmentPanel {
     } catch { this.document = undefined; this.message(this.t("refreshNeeded")); }
     finally { this.scanController = undefined; this.working = false; if (!this.disposed) { this.renderList(); this.renderHistory(); this.updateButtons(); } }
   }
+  private confirmDeleteHistory(ids: string[]): void {
+    if (this.working || this.manager.busy) return;
+    const selected = new Set(ids), jobs = this.manager.journal.jobs.filter(job => selected.has(job.id));
+    if (!jobs.length) return;
+    const panel = this.childPanel(this.t("deleteHistoryTitle"), { width: "680px", height: "auto" });
+    panel.root.classList.add("syic-delete-history");
+    panel.root.append(element("p", "", this.t("deleteHistoryConfirm", { count: jobs.length })));
+    const list = element("ul", "syic-delete-list");
+    for (const job of jobs.slice(0, 5)) list.append(element("li", "", `${job.documentTitle} · ${new Date(job.created).toLocaleString()}`));
+    if (jobs.length > 5) list.append(element("li", "", this.t("moreDeleteJobs", { count: jobs.length - 5 })));
+    panel.root.append(list, element("p", "syic-note", this.t("deleteHistoryScope")));
+    if (jobs.some(job => job.state === "interrupted" || job.items.some(item => ["applying", "recovery-required"].includes(item.state)))) {
+      panel.root.append(element("p", "syic-note", this.t("deleteRecoveryWarning")));
+    }
+    const actions = element("div", "syic-actions");
+    const cancel = this.button(this.t("cancel"), () => panel.destroy());
+    const remove = this.button(this.t("confirmDeleteHistory"), async () => {
+      if (panel.closed || this.working || this.manager.busy) return;
+      panel.destroy(); this.working = this.deletingHistory = true; this.updateButtons(); this.message(this.t("deletingBackups"));
+      try { await this.manager.deleteHistory(jobs.map(job => job.id)); this.message(this.t("historyDeleted")); }
+      catch (error) { this.error(error); }
+      finally { this.working = this.deletingHistory = false; if (!this.disposed) { this.renderHistory(); this.updateButtons(); } }
+    });
+    remove.classList.add("syic-danger"); actions.append(cancel, remove); panel.root.append(actions);
+  }
   private renderHistory(): void {
-    if (!this.history.querySelector("h3")) this.history.append(element("h3", "", this.t("history")));
+    if (!this.history.querySelector("h3")) {
+      const heading = element("div", "syic-history-heading");
+      const clear = this.button(this.t("clearHistory"), () => this.confirmDeleteHistory(this.manager.journal.jobs.map(job => job.id)));
+      clear.classList.add("syic-clear-history", "syic-danger");
+      heading.append(element("h3", "", this.t("history")), clear); this.history.append(heading);
+    }
+    this.history.querySelector<HTMLButtonElement>(".syic-clear-history")!.disabled = this.working || this.manager.busy || !this.manager.journal.jobs.length;
     const visible = new Set(this.manager.journal.jobs.slice(0, this.historyLimit).map(job => job.id));
     for (const [id, entry] of this.historyEntries) if (!visible.has(id)) { entry.details.remove(); this.historyEntries.delete(id); }
     this.history.querySelector(".syic-more-history")?.remove();
@@ -481,17 +513,18 @@ export class AttachmentPanel {
         entry = { details, key: "" }; this.historyEntries.set(job.id, entry);
       }
       const { details } = entry;
-      const key = JSON.stringify([job.created, job.documentTitle, job.kind, job.state, details.open,
+      const key = JSON.stringify([job.created, job.documentTitle, job.kind, job.state, job.deleting, details.open,
         details.open ? job.items.map(item => [item.state, item.oldPath, item.newPath, item.error]) : undefined]);
       if (entry.key !== key) {
         entry.key = key;
         details.replaceChildren(element("summary", "", `${new Date(job.created).toLocaleString()} · ${job.documentTitle} · ${this.t(job.kind === "compress" ? "compress" : "rename")} · ${this.t(job.state)}`));
+        if (job.deleting) details.querySelector("summary")!.textContent += ` · ${this.t("deletionPending")}`;
         if (details.open) {
         for (const item of job.items) {
-          const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n→ ${item.newPath || "—"}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
+          const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n${item.operation === "replace-file" ? this.t("inPlaceCompression") : `→ ${item.newPath || "—"}`}${item.backupDiskPath ? `\n${this.t("backup")}: ${item.backupDiskPath}` : ""}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
         }
-        if (job.items.some(item => ["completed", "applying", "recovery-required"].includes(item.state))) {
-          const restore = this.button(this.t("restore"), async () => {
+        if (!job.deleting && job.items.some(item => ["completed", "applying", "recovery-required"].includes(item.state))) {
+          const restore = this.button(this.t(job.items.some(item => item.operation === "replace-file") ? "restoreImage" : "restore"), async () => {
             if (this.working || this.manager.busy) return;
             this.working = true; this.updateButtons();
             try { await this.manager.restore(job); this.message(this.t("restored")); }
@@ -499,6 +532,8 @@ export class AttachmentPanel {
             finally { await this.refreshAfterJob(); }
           }); restore.disabled = this.working || this.manager.busy; details.append(restore);
         }
+        const remove = this.button(this.t(job.deleting ? "retryDeleteHistory" : "deleteHistory"), () => this.confirmDeleteHistory([job.id]));
+        remove.classList.add("syic-danger"); remove.disabled = this.working || this.manager.busy; details.append(remove);
         }
       }
       const anchor = this.history.children[position++];

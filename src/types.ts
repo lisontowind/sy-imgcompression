@@ -32,12 +32,15 @@ export interface DocumentAssets { id: string; title: string; notebooks: Notebook
 export interface CompressionResult { bytes: ArrayBuffer; mime: string; extension: string; width: number; height: number; originalWidth: number; originalHeight: number }
 export type ItemState = "pending" | "prepared" | "applying" | "completed" | "skipped" | "failed" | "recovery-required" | "restored";
 export interface JobItem {
+  operation?: "replace-file";
+  backupDiskPath?: string;
   oldPath: string; newPath: string; oldDiskPath: string; newDiskPath: string;
   state: ItemState; before: AssetReference[]; plannedAfter: AssetReference[]; after?: AssetReference[];
   error?: string; originalSize: number; resultSize?: number; sourceDigest?: string; targetDigest?: string;
   historyPath?: string; compressionOptions?: CompressionOptions;
 }
 export interface AssetJob {
+  deleting?: boolean;
   schema: 1; id: string; kind: JobKind; documentId: string; documentTitle: string;
   created: string; finished?: string; state: "running" | "completed" | "interrupted" | "restored";
   options: CompressionOptions | RenameOptions; items: JobItem[];

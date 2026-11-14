@@ -89,7 +89,7 @@ it("loads reference details on demand and reuses them only within the current sc
   vi.mocked(scanDocument).mockResolvedValue(deferred);
   const { root, kernel } = await setup();
   expect(kernel.post).not.toHaveBeenCalled();
-  expect(root.querySelector(".syic-impact")!.textContent).toContain("when you open reference details");
+  expect(root.querySelector(".syic-impact")!.textContent).toContain("no workspace reference scan");
   vi.mocked(kernel.post).mockResolvedValue(report([ref()]));
   await click("Reference details", root);
   await vi.waitFor(() => expect(document.querySelectorAll(".syic-ref")).toHaveLength(1));
@@ -236,4 +236,42 @@ it("cancels an in-flight scan when the panel closes", async () => {
   await click("Scan current document");
   expect(signal?.aborted).toBe(false); panel.dispose();
   expect(signal?.aborted).toBe(true);
+});
+
+function historyJob(id: string, deleting = false): AssetJob {
+  return { schema: 1, id, kind: "compress", documentId: doc.id, documentTitle: `History ${id}`, created: "2026-11-14T00:00:00.000Z",
+    state: "completed", deleting, options: loadSettings(undefined).global.options, items: [{ oldPath: "assets/a.png", newPath: "assets/a.png",
+      oldDiskPath: "/data/assets/a.png", newDiskPath: "/data/assets/a.png", operation: "replace-file", originalSize: 45, state: "completed", before: [], plannedAfter: [] }] };
+}
+it("confirms single-task deletion and cancellation leaves the task untouched", async () => {
+  const { root, manager } = await setup(); const job = historyJob("one"); manager.journal.jobs = [job]; manager.onChange?.();
+  const scans = vi.mocked(scanDocument).mock.calls.length;
+  const remove = vi.spyOn(manager, "deleteHistory").mockResolvedValue();
+  const details = root.querySelector<HTMLDetailsElement>(".syic-history details")!; details.open = true; details.dispatchEvent(new Event("toggle"));
+  await click("Delete task and backups", details);
+  const dialog = document.querySelector<HTMLElement>(".syic-delete-history")!;
+  expect(dialog.textContent).toContain("Delete 1 task records"); expect(dialog.textContent).toContain("can no longer be restored");
+  expect(remove).not.toHaveBeenCalled(); await click("Cancel", dialog); expect(remove).not.toHaveBeenCalled();
+  await click("Delete task and backups", details);
+  await click("Confirm deletion", document.querySelector(".syic-delete-history")!);
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith([job.id]));
+  expect(vi.mocked(scanDocument)).toHaveBeenCalledTimes(scans);
+});
+it("clears all records including those hidden by the history display limit", async () => {
+  const { root, manager } = await setup(); manager.journal.jobs = Array.from({ length: 25 }, (_, index) => historyJob(String(index))); manager.onChange?.();
+  const ids = manager.journal.jobs.map(job => job.id);
+  const remove = vi.spyOn(manager, "deleteHistory").mockImplementation(async () => { manager.journal.jobs = []; manager.onChange?.(); });
+  expect(root.querySelectorAll(".syic-history > details")).toHaveLength(20);
+  await click("Clear all history and backups", root);
+  expect(document.querySelector(".syic-delete-history")?.textContent).toContain("Delete 25 task records");
+  await click("Confirm deletion", document.querySelector(".syic-delete-history")!);
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith(ids));
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>(".syic-clear-history")!.disabled).toBe(true));
+  expect(root.querySelectorAll(".syic-history > details")).toHaveLength(0);
+});
+it("offers continued deletion and hides recovery for partially deleted tasks", async () => {
+  const { root, manager } = await setup(); manager.journal.jobs = [historyJob("partial", true)]; manager.onChange?.();
+  const details = root.querySelector<HTMLDetailsElement>(".syic-history details")!; details.open = true; details.dispatchEvent(new Event("toggle"));
+  expect(details.querySelector("summary")!.textContent).toContain("Deletion incomplete");
+  expect([...details.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Continue deletion"]);
 });

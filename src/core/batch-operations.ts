@@ -20,6 +20,11 @@ export const batchUnsupported = (error: unknown): boolean => error instanceof Ke
 export async function applyBatch(kernel: Kernel, job: AssetJob, assets: Map<string, AssetIdentity>, items: JobItem[], context: BatchContext, outputs?: Map<string, ArrayBuffer>): Promise<boolean> {
   if (!items.length) { await context.save(); return true; }
   context.checkCancelled();
+  const progress = (stage: string) => context.progress({
+    done: job.items.filter(item => ["completed", "skipped"].includes(item.state)).length,
+    total: job.items.length, path: items.length === 1 ? items[0].oldPath : "", stage,
+  });
+  progress("scanningReferences");
   let baseline: Awaited<ReturnType<typeof findReferencesBatch>>;
   try { baseline = await findReferencesBatch(kernel, items.map(item => item.oldPath), context.signal); }
   catch (error) { if (batchUnsupported(error)) return false; throw error; }
@@ -55,6 +60,7 @@ export async function applyBatch(kernel: Kernel, job: AssetJob, assets: Map<stri
       if (await digest(await kernel.readFile(item.oldDiskPath, context.signal)) !== item.sourceDigest) throw new UserError("sourceChanged", item.oldPath);
       if (await digest(await kernel.readFile(item.newDiskPath, context.signal)) !== item.targetDigest) throw new UserError("writeVerificationFailed", item.newPath);
     }
+    progress("checkingMigration");
     const dry = await relinkBatch(kernel, items, true, context.signal);
     for (const item of items) {
       const refs = dry.references.get(item.oldPath)!;
@@ -68,6 +74,7 @@ export async function applyBatch(kernel: Kernel, job: AssetJob, assets: Map<stri
     // Mutations and their final checks must finish even after cancellation.
     const applied = await relinkBatch(kernel, items, false);
     for (const item of items) item.historyPath = applied.report.historyPath;
+    progress("verifyingReferences");
     const verified = await findReferencesBatch(kernel, items.flatMap(item => [item.oldPath, item.newPath]));
     for (const item of items) {
       const after = verified.get(item.newPath)!;

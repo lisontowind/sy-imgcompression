@@ -72,6 +72,10 @@ it("requires a successful kernel acknowledgement when persisting a journal", asy
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('{"code":-1,"msg":"disk full"}')));
   await expect(new SiYuanKernel().putFile("journal", new ArrayBuffer(0))).rejects.toThrow("disk full");
 });
+it("retains explicit kernel error codes for idempotent backup cleanup", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('{"code":404,"msg":"path does not exist"}')));
+  await expect(new SiYuanKernel().post("/api/file/removeFile", { path: "backup" })).rejects.toMatchObject({ code: 404, outcomeUnknown: false });
+});
 
 it("forwards cancellation to read-only fetches and preserves cancellation errors", async () => {
   const controller = new AbortController();

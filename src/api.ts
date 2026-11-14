@@ -5,7 +5,7 @@ import { ReadPool } from "./core/read-pool";
 const sharedReads = new Set(["/api/asset/statAsset", "/api/asset/resolveAssetPath", "/api/notebook/lsNotebooks", "/api/block/getBlockInfo", "/api/block/getDocInfo", "/api/lute/md2html"]);
 
 export class KernelError extends Error {
-  constructor(public endpoint: string, public data: unknown, message: string, public outcomeUnknown = false) { super(message); }
+  constructor(public endpoint: string, public data: unknown, message: string, public outcomeUnknown = false, public code?: number) { super(message); }
 }
 export class SiYuanKernel implements Kernel {
   private reads = new ReadPool();
@@ -24,7 +24,7 @@ export class SiYuanKernel implements Kernel {
     try { result = await response.json(); }
     catch { checkCancelled(signal); throw new KernelError(endpoint, undefined, "Invalid kernel response", true); }
     checkCancelled(signal);
-    if (result.code !== 0) throw new KernelError(endpoint, result.data, result.msg || `Kernel error ${result.code}`);
+    if (result.code !== 0) throw new KernelError(endpoint, result.data, result.msg || `Kernel error ${result.code}`, false, result.code);
     return result.data;
   }
   private async fileResponse(path: string, signal?: AbortSignal): Promise<Response> {

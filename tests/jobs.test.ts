@@ -7,9 +7,10 @@ import { MAX_BYTES } from "../src/compression/image-info";
 import { KernelError } from "../src/api";
 
 afterEach(() => vi.unstubAllGlobals());
+function sourcePng(): ArrayBuffer { const bytes = new Uint8Array(100); bytes.set(new Uint8Array(png())); return bytes.buffer; }
 
 class FakeKernel implements Kernel {
-  files = new Map<string, ArrayBuffer>([["/data/assets/a.png", png()]]);
+  files = new Map<string, ArrayBuffer>([["/data/assets/a.png", sourcePng()]]);
   refs = new Map<string, AssetReference[]>([["assets/a.png", [ref("one"), ref("two")]]]);
   mutations = 0;
   failWrite = false;
@@ -44,10 +45,10 @@ function setup() {
   const kernel = new FakeKernel();
   let saved: Journal | undefined;
   const store: JournalStore = { load: async () => saved, save: async journal => { saved = structuredClone(journal); } };
-  const asset: AssetIdentity = { path: "assets/a.png", diskPath: "/data/assets/a.png", name: "a.png", extension: ".png", size: 45,
+  const asset: AssetIdentity = { path: "assets/a.png", diskPath: "/data/assets/a.png", name: "a.png", extension: ".png", size: 100,
     references: structuredClone(kernel.refs.get("assets/a.png")!), blockers: [], selected: true, order: 0 };
   const document: DocumentAssets = { id: "20261016000000-abcdefg", title: "项目实施方案验收记录", notebooks: [], assets: [asset] };
-  const output: CompressionResult = { bytes: new ArrayBuffer(20), width: 16, height: 12, originalWidth: 16, originalHeight: 12, extension: ".webp", mime: "image/webp" };
+  const output: CompressionResult = { bytes: png(), width: 16, height: 12, originalWidth: 16, originalHeight: 12, extension: ".png", mime: "image/png" };
   const compressor = { compress: vi.fn(async (_bytes: ArrayBuffer, _options: CompressionOptions) => output), cancel: vi.fn() };
   const manager = new JobManager(kernel, store, compressor);
   return { kernel, manager, store, document, output, compressor, getSaved: () => saved };
@@ -59,7 +60,7 @@ describe("durable attachment jobs", () => {
     await manager.initialize(); await other.initialize();
     const first = await manager.run(document, "compress", DEFAULT_COMPRESSION);
     const asset = { ...structuredClone(document.assets[0]), path: "assets/b.png", name: "b.png", diskPath: "/data/assets/b.png", references: [ref("b", "assets/b.png")] };
-    kernel.files.set(asset.diskPath, png()); kernel.refs.set(asset.path, asset.references);
+    kernel.files.set(asset.diskPath, sourcePng()); kernel.refs.set(asset.path, asset.references);
     const second = await other.run({ ...document, assets: [asset] }, "compress", DEFAULT_COMPRESSION);
     expect(getSaved()!.jobs.map(job => job.id)).toEqual([second.id, first.id]);
     // Restoring from an older window must keep the newer window's record too.
@@ -102,7 +103,7 @@ describe("durable attachment jobs", () => {
     const { kernel, manager, document, compressor } = setup(); let finish!: (bytes: ArrayBuffer) => void;
     kernel.readFile = () => new Promise(resolve => { finish = resolve; });
     const preview = manager.preview(document.assets[0], DEFAULT_COMPRESSION);
-    manager.cancel(); finish(png());
+    manager.cancel(); finish(sourcePng());
     await expect(preview).rejects.toThrow("cancelled"); expect(compressor.compress).not.toHaveBeenCalled(); expect(manager.busy).toBe(false);
   });
   it("does not start compression when preview was cancelled during hashing", async () => {
@@ -128,14 +129,15 @@ describe("durable attachment jobs", () => {
     await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("journal unreadable");
     expect(save).not.toHaveBeenCalled(); expect(kernel.mutations).toBe(0);
   });
-  it("compresses a shared attachment once and migrates all references", async () => {
+  it("compresses a shared attachment in place without changing any references", async () => {
     const { kernel, manager, document, getSaved } = setup();
     const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
     expect(job.state).toBe("completed"); expect(job.items[0].state).toBe("completed");
-    expect(kernel.refs.get("assets/a.png")).toEqual([]);
+    expect(job.items[0].newPath).toBe("assets/a.png");
     expect(kernel.refs.get(job.items[0].newPath)).toHaveLength(2);
     expect(kernel.files.has("/data/assets/a.png")).toBe(true);
-    expect(getSaved()?.jobs[0].items[0].after).toHaveLength(2);
+    expect(getSaved()?.jobs[0].items[0].operation).toBe("replace-file");
+    expect(await kernel.readFile(job.items[0].backupDiskPath!)).toEqual(sourcePng());
   });
   it("restores checked references without deleting either file", async () => {
     const { kernel, manager, document } = setup();
@@ -143,12 +145,12 @@ describe("durable attachment jobs", () => {
     await manager.restore(job);
     expect(job.state).toBe("restored"); expect(kernel.refs.get("assets/a.png")).toHaveLength(2); expect(kernel.files.size).toBe(2);
   });
-  it("blocks recovery when a user adds a new reference", async () => {
+  it("restores image bytes even when another reference to that file was added", async () => {
     const { kernel, manager, document } = setup(); const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
     kernel.refs.get(job.items[0].newPath)!.push({ ...ref("user-added"), reference: job.items[0].newPath });
-    const writes = kernel.mutations;
-    await expect(manager.restore(job)).rejects.toThrow("restoreConflict");
-    expect(kernel.mutations).toBe(writes); expect(job.items[0].state).toBe("recovery-required");
+    await manager.restore(job);
+    expect(kernel.refs.get("assets/a.png")).toHaveLength(3);
+    expect(await kernel.readFile("/data/assets/a.png")).toEqual(sourcePng());
   });
   it("blocks recovery if the source file changed", async () => {
     const { kernel, manager, document } = setup(); const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
@@ -157,7 +159,7 @@ describe("durable attachment jobs", () => {
   });
   it("performs no writes if references changed after scanning", async () => {
     const { kernel, manager, document } = setup(); kernel.refs.get("assets/a.png")!.push(ref("added-before-apply"));
-    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("sourceChanged"); expect(kernel.mutations).toBe(0);
+    await expect(manager.run(document, "rename", DEFAULT_RENAME)).rejects.toThrow("sourceChanged"); expect(kernel.mutations).toBe(0);
   });
   it("keeps the original on upload failure", async () => {
     const { kernel, manager, document } = setup(); kernel.failWrite = true;
@@ -166,7 +168,7 @@ describe("durable attachment jobs", () => {
   });
   it("rolls back a partial mutation whose request failed", async () => {
     const { kernel, manager, document } = setup(); kernel.partialFailure = true;
-    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("connection lost");
+    await expect(manager.run(document, "rename", DEFAULT_RENAME)).rejects.toThrow("connection lost");
     expect(kernel.refs.get("assets/a.png")).toHaveLength(2); expect(manager.journal.jobs[0].items[0].state).toBe("restored");
   });
   it("skips a result without savings without uploading anything", async () => {
@@ -179,7 +181,7 @@ describe("durable attachment jobs", () => {
     const { kernel, manager, document } = setup();
     Object.assign(document.assets[0], { referencesLoaded: false, references: [] });
     kernel.refs.get("assets/a.png")!.push(ref("added-before-apply"));
-    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    const job = await manager.run(document, "rename", DEFAULT_RENAME);
     expect(job.items[0].before).toHaveLength(3); expect(job.items[0].after).toHaveLength(3);
     expect(job.items[0].state).toBe("completed");
   });
@@ -188,13 +190,13 @@ describe("durable attachment jobs", () => {
     Object.assign(document.assets[0], { referencesLoaded: false, references: [] });
     const post = kernel.post.bind(kernel);
     kernel.post = async (endpoint, body) => endpoint.endsWith("findAssetReferences") ? { ...report(), skippedNotebooks: ["encrypted"] } as never : post(endpoint, body);
-    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("incompleteScan");
+    await expect(manager.run(document, "rename", DEFAULT_RENAME)).rejects.toThrow("incompleteScan");
     expect(kernel.mutations).toBe(0);
   });
   it("does not write an attachment whose deferred references have disappeared", async () => {
     const { kernel, manager, document } = setup();
     Object.assign(document.assets[0], { referencesLoaded: false, references: [] }); kernel.refs.clear();
-    await expect(manager.run(document, "compress", DEFAULT_COMPRESSION)).rejects.toThrow("noReferences");
+    await expect(manager.run(document, "rename", DEFAULT_RENAME)).rejects.toThrow("noReferences");
     expect(kernel.mutations).toBe(0);
   });
   it("uses image names and preserves the original bytes", async () => {
@@ -219,7 +221,7 @@ describe("durable attachment jobs", () => {
   it("snapshots effective per-image parameters and leaves other images on global settings", async () => {
     const { kernel, manager, document, compressor } = setup();
     const second = { ...structuredClone(document.assets[0]), path: "assets/b.png", name: "b.png", diskPath: "/data/assets/b.png", references: [ref("b")] };
-    kernel.files.set(second.diskPath, png()); kernel.refs.set(second.path, second.references); document.assets.push(second);
+    kernel.files.set(second.diskPath, sourcePng()); kernel.refs.set(second.path, second.references); document.assets.push(second);
     const custom: CompressionOptions = { ...DEFAULT_COMPRESSION, quality: 60, resize: { mode: "percent", value: 50 } };
     const job = await manager.run(document, "compress", DEFAULT_COMPRESSION, new Map([["assets/a.png", custom]]));
     expect(compressor.compress.mock.calls.map(call => call[1].quality)).toEqual([60, 82]);
@@ -242,7 +244,9 @@ describe("durable attachment jobs", () => {
     await expect(manager.run(document, "rename", DEFAULT_RENAME)).rejects.toThrow("noChanges"); expect(kernel.mutations).toBe(0);
   });
   it("restores old schema-1 jobs without per-image options", async () => {
-    const { manager, document } = setup(); const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
+    const { manager, document, getSaved } = setup(); const job = await manager.run(document, "rename", DEFAULT_RENAME);
+    // Older compression jobs used the same reference migration records as renames.
+    getSaved()!.jobs[0].kind = "compress";
     delete job.items[0].compressionOptions; await manager.restore(job); expect(job.state).toBe("restored");
   });
   it("marks crash-interrupted operations for review without replaying", async () => {
@@ -258,9 +262,9 @@ describe("durable attachment jobs", () => {
   });
   it("cancels an in-flight migration only after verifying and restoring it", async () => {
     const { kernel, manager, document } = setup();
-    manager.onProgress = progress => { if (progress.stage === "updatingReferences") manager.cancel(); };
+    manager.onProgress = progress => { if (progress.stage === "writingImage") manager.cancel(); };
     const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
-    expect(job.state).toBe("interrupted"); expect(job.items[0].state).toBe("restored");
+    expect(job.state).toBe("interrupted"); expect(job.items[0].state).toBe("failed");
     expect(kernel.refs.get("assets/a.png")).toHaveLength(2);
   });
   it("blocks a simultaneous job while another worker is running", async () => {

@@ -15,7 +15,7 @@
 | `guide/03-compression-preview.png` | 1600 × 1200 | 点击生成预览、尺寸与体积对比 |
 | `guide/04-custom-names.png` | 1600 × 1200 | 自定义前缀与逐张名称 |
 | `guide/05-quick-compression.png` | 1600 × 1200 | 独立右键快捷配置 |
-| `guide/06-history-recovery.png` | 1600 × 1200 | 任务记录、恢复与原文件保留 |
+| `guide/06-history-recovery.png` | 1600 × 1200 | 任务记录、原图恢复与备份清理 |
 
 图标和预览图的规格依据：[思源官方插件示例](https://github.com/siyuan-note/plugin-sample/blob/main/README.zh-CN.md)。
 `plugin.json` 已声明图标、预览图文件，这两个文件随插件打包。

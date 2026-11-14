@@ -34,7 +34,8 @@ export function profileEditor(root: HTMLElement, profile: CompressionProfile, t:
     field("preset", select([["90", t("clear")], ["82", t("balanced")], ["70", t("small")], ["custom", t("custom")]], profile.preset, value => {
       profile.preset = value as CompressionProfile["preset"]; if (value !== "custom") profile.options.quality = Number(value);
     }));
-    field("format", select([["webp", "WebP"], ["original", t("originalFormat")]], profile.options.format, value => { profile.options.format = value as CompressionOptions["format"]; }));
+    const format = select([["original", t("originalFormat")]], "original", () => {});
+    format.disabled = true; format.dataset.locked = "true"; field("format", format);
     const quality = number(profile.options.quality, 100, value => { profile.options.quality = value; profile.preset = "custom"; });
     if (pngOnly && profile.options.format === "original") { quality.disabled = true; quality.dataset.locked = "true"; }
     field("quality", quality);
@@ -51,7 +52,8 @@ export function profileEditor(root: HTMLElement, profile: CompressionProfile, t:
       field(sizeChoice === "custom" ? "percentValue" : "pixelValue", number(size.value, sizeChoice === "custom" ? 100 : 100000, value => { size.value = value; }));
     }
     root.append(element("p", "syic-note", t("aspectHint")));
+    root.append(element("p", "syic-note", t("inPlaceHint")));
     if (profile.options.format === "original") root.append(element("p", "syic-note", t("pngQualityHint")));
   };
-  profile.options = cloneOptions(profile.options); render();
+  profile.options = { ...cloneOptions(profile.options), format: "original" }; render();
 }

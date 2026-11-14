@@ -83,9 +83,15 @@
 .syic > .syic-note { margin: 12px 0; padding: 9px 12px; border-radius: 6px; background: var(--syic-surface); }
 .syic-history { border-top: 1px solid var(--syic-border); margin-top: 18px; padding-top: 12px; }
 .syic-history h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+.syic-history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.syic-history-heading h3 { margin: 0; }
+.syic .syic-danger { color: var(--b3-theme-error); }
+.syic-delete-history { height: auto; max-height: 75vh; }
+.syic-delete-list { overflow-wrap: anywhere; padding-left: 22px; }
 .syic-history > details { padding: 8px 0; border-bottom: 1px solid var(--syic-border); }
 .syic-history summary { cursor: pointer; color: var(--syic-muted); font-size: 12px; line-height: 1.7; }
 .syic-history details[open] > summary { color: var(--b3-theme-on-background); }
+.syic-history details > button { margin: 8px 8px 0 0; }
 .syic-job-item { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; margin: 8px 0; background: var(--syic-surface); border-radius: 6px; font-size: 11px; }
 .syic-child { height: 100%; overflow: auto; }
 .syic-child > .syic-profile { padding: 14px; border: 1px solid var(--syic-border); border-radius: 8px; background: var(--syic-surface); margin-bottom: 12px; }

@@ -154,7 +154,9 @@ try {
   await check("built plugin opens compression first and scans one shared file", async () => {
     assert.equal(await page.getByRole("tab", { name: "Image compression", exact: true }).getAttribute("aria-selected"), "true");
     assert.equal(await page.locator("tbody tr").count(), 1);
-    assert((await page.locator(".syic-summary").textContent()).includes("Workspace references are checked when"));
+    assert((await page.locator(".syic-summary").textContent()).includes("no workspace reference scan"));
+    assert.equal(await page.getByLabel("Output format", { exact: true }).inputValue(), "original");
+    assert(await page.getByLabel("Output format", { exact: true }).isDisabled());
     assert.equal(referenceRequests.length, 0, "opening the panel must not scan workspace references");
     assert((await page.locator(".syic-total").textContent()).includes("Document attachment total:"));
   });
@@ -169,7 +171,7 @@ try {
     const openReference = page.locator(".syic-ref button").filter({ hasText: "Plugin fixture A" }).first();
     await openReference.click(); await page.locator('.syic-reader[data-readonly="true"] img').first().waitFor();
     assert.equal(referenceRequests.length, 1, "only the explicitly opened attachment should be queried");
-    assert((await page.locator(".syic-summary").textContent()).includes("1 closed"));
+    assert((await page.locator(".syic-summary").textContent()).includes("Every reference to the same file"));
     assert.equal(await page.locator(".sy-imgcompression-root tbody tr").count(), 1);
     await page.evaluate(() => window.__dialogs.at(-1).destroy());
   });
@@ -191,7 +193,7 @@ try {
     assert.equal(referenceRequests.length, before, "menu metadata must not scan workspace references");
     assert.equal(apiRequests.slice(metadataStart).filter(endpoint => endpoint.endsWith("getBlockInfo")).length, 1, "concurrent menus must share document totals");
   });
-  await check("offline WASM worker compresses WebP with alpha", async () => {
+  await check("offline WASM compression preview preserves alpha", async () => {
     const before = referenceRequests.length;
     await page.getByRole("button", { name: "Preview", exact: true }).click();
     assert.equal(await page.locator(".syic-preview img").count(), 0);
@@ -261,26 +263,41 @@ try {
     assert.equal(checks.exact, true); assert.equal(checks.pngMime, "image/png"); assert.deepEqual(checks.scaled, [128, 96]);
     assert.deepEqual(checks.jpeg, [40, 64]); assert.equal(checks.jpegMime, "image/jpeg");
   });
-  await check("compression migrates all references and preserves closed notebook state", async () => {
+  await check("compression overwrites only image bytes without workspace requests and preserves closed notebooks", async () => {
     const before = referenceRequests.length;
+    const started = performance.now(), apiStart = apiRequests.length;
+    renameAPITimings = {}; measuringRename = true;
     await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), { timeout: 30000 });
     const job = (await readJournal()).jobs[0];
     assert.equal(job.items[0].state, "completed");
     await page.waitForFunction(() => !document.querySelector(".syic-actions button")?.disabled);
-    assert.equal(referenceRequests.length - before, 5, "post-job refresh must not repeat workspace reference scans");
-    const old = await api("/api/asset/findAssetReferences", { path: assetPath }); assert(!old.references.some(ref => !["annotation-file", "ocr"].includes(ref.type)));
+    measuringRename = false;
+    metrics.compressSingle = { elapsedMs: Math.round(performance.now() - started), workspaceRequests: referenceRequests.length - before,
+      journalWrites: apiRequests.slice(apiStart).filter(endpoint => endpoint.endsWith("putFile")).length - 2, apiTimings: structuredClone(renameAPITimings) };
+    console.log("Single-image compression: " + JSON.stringify(metrics.compressSingle));
+    renameAPITimings = {};
+    assert.equal(referenceRequests.length - before, 0, "image compression must not query or migrate workspace references");
+    assert.equal(job.items[0].operation, "replace-file"); assert.equal(job.items[0].newPath, assetPath);
+    assert.equal(job.items[0].compressionOptions.format, "original");
+    assert.deepEqual(fs.readFileSync(path.join(workspace, job.items[0].backupDiskPath.slice(1))), Buffer.from(source));
+    assert(fs.statSync(path.join(workspace, "data", assetPath)).size < source.length);
+    assert(fs.statSync(path.join(workspace, "data", assetPath)).mtimeMs > fs.statSync(path.join(workspace, job.items[0].backupDiskPath.slice(1))).mtimeMs);
+    const old = await api("/api/asset/findAssetReferences", { path: assetPath }); assert(old.references.some(ref => ref.type === "title-image"));
     const after = await api("/api/asset/findAssetReferences", { path: job.items[0].newPath }); assert(after.references.some(ref => ref.rootID === closedId));
     const database = JSON.parse(fs.readFileSync(path.join(workspace, "data/storage/av", avID + ".json"), "utf8"));
     assert.equal(database.keyValues[0].values[0].mAsset[0].content, job.items[0].newPath + "#database");
     const books = await api("/api/notebook/lsNotebooks"); assert.equal(books.notebooks.find(book => book.id === bookB).closed, true);
     assert(fs.existsSync(path.join(workspace, "data", assetPath)));
   });
-  await check("completed task recovery restores shared references", async () => {
+  await check("completed image task restores original bytes without workspace requests", async () => {
+    const before = referenceRequests.length;
     await page.locator(".syic-history > details").first().locator("summary").first().click();
-    await page.getByRole("button", { name: "Restore matching references", exact: true }).first().click();
+    await page.getByRole("button", { name: "Restore original image files", exact: true }).first().click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", { timeout: 30000 });
     assert((await api("/api/asset/findAssetReferences", { path: assetPath })).references.some(ref => ref.rootID === closedId));
+    assert.equal(referenceRequests.length - before, 0);
+    assert.deepEqual(fs.readFileSync(path.join(workspace, "data", assetPath)), Buffer.from(source));
   });
   await check("custom batch prefixes and individual names retain native IDs and migrate shared references", async () => {
     await page.getByRole("tab", { name: "Image renaming", exact: true }).click();
@@ -325,6 +342,7 @@ try {
     await page.waitForFunction(() => !document.querySelector('.syic-child'));
     await page.evaluate(()=>window.__open());await page.waitForFunction(()=>document.querySelector('.syic-status')?.textContent==='Ready',{timeout:30000});
     const count = await page.locator("section").count();
+    const referenceStart = referenceRequests.length;
     await page.evaluate(({id,assetPath}) => {
       const image=document.createElement('img');image.src='/'+assetPath; const items=[];
       window.__events['open-menu-image']({detail:{menu:{addItem:item=>items.push(item)},element:image,protyle:{block:{rootID:id},disabled:false}}});
@@ -339,6 +357,8 @@ try {
     const dimensions = await page.evaluate(async path => { const image=await createImageBitmap(await (await fetch('/'+path)).blob());const size=[image.width,image.height];image.close();return size; }, job.items[0].newPath);
     assert.deepEqual(dimensions, [256,192]);
     await page.waitForFunction(() => document.querySelector('.syic-status')?.textContent==='Ready', {timeout:30000});
+    assert.equal(referenceRequests.length - referenceStart, 0, "quick compression must not query workspace references");
+    assert.equal(job.items[0].oldPath, job.items[0].newPath);
   });
   await check("per-image overrides affect real outputs while other images inherit global settings", async () => {
     const secondPath = "assets/second-20261016000200-abcdefg.png"; await put('/data/'+secondPath,new Uint8Array(source));
@@ -348,8 +368,7 @@ try {
     await page.getByRole('button',{name:'Individual settings',exact:true}).first().click();
     await page.locator('.syic-child').getByLabel('Resize mode',{exact:true}).selectOption('50');
     await page.locator('.syic-child').getByRole('button',{name:'Save settings',exact:true}).click();
-    await page.locator('.syic-global-profile').getByLabel('Quality',{exact:true}).fill('70');
-    await page.locator('.syic-global-profile').getByLabel('Quality',{exact:true}).blur();
+    await page.locator('.syic-global-profile').getByLabel('Preset',{exact:true}).selectOption('70');
     assert((await page.locator('.syic-item-config').first().textContent()).includes('50%'));
     await page.getByRole('button',{name:'Apply to selected attachments',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('.syic-status')?.textContent?.startsWith('Completed'),{timeout:30000});
@@ -379,7 +398,7 @@ try {
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     await page.setViewportSize({width:1280,height:1000});
     await page.getByRole("tab", { name: "图片重命名", exact: true }).click();
-    assert((await page.locator("tbody").textContent()).includes("无需修改"));
+    assert.equal(await page.locator(".syic-rename-target").count(), 2);
     await page.locator('.sy-imgcompression-root').evaluate(root=>{root.scrollTop=0;});
     await page.screenshot({ path: path.join(testRoot, "rename-zh-dark.png"), fullPage: true });
   });
@@ -417,7 +436,7 @@ try {
       assert.deepEqual(latest.jobs.slice(0, 2).map(job => job.documentId), [...documentIds].reverse());
       assert.deepEqual(latest.jobs.slice(2).map(job => job.id), originalIds);
       await windows[0].locator('.syic-history > details').first().locator('summary').click();
-      await windows[0].getByRole('button', { name: 'Restore matching references', exact: true }).first().click();
+      await windows[0].getByRole('button', { name: 'Restore original image files', exact: true }).first().click();
       await windows[0].waitForFunction(() => document.querySelector('.syic-status')?.textContent === 'Restored');
       const restored = await readJournal();
       assert.equal(restored.jobs[0].state, 'completed'); assert.equal(restored.jobs[1].state, 'restored');
@@ -480,10 +499,10 @@ try {
     metrics.restore118 = { elapsedMs: Math.round(performance.now() - restoreStarted), workspaceRequests: 4, images: 118, apiTimings: renameAPITimings };
     console.log("118-image restore: " + JSON.stringify(metrics.restore118));
   });
-  await check("118 images compress and recover with four workspace requests per bounded batch", async () => {
+  await check("118 images compress and restore in place without workspace reference requests", async () => {
     await page.getByRole("tab", { name: "Image compression", exact: true }).click();
     await page.getByLabel("Preset", { exact: true }).selectOption("82");
-    await page.getByLabel("Output format", { exact: true }).selectOption("webp");
+    assert.equal(await page.getByLabel("Output format", { exact: true }).inputValue(), "original");
     await page.getByLabel("Resize mode", { exact: true }).selectOption("original");
     assert.equal(await page.locator("tbody tr").count(), 118);
     const start = referenceRequests.length, started = performance.now(); renameAPITimings = {}; measuringRename = true;
@@ -491,16 +510,20 @@ try {
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), undefined, { timeout: 180000 });
     await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 }); measuringRename = false;
     const job = (await readJournal()).jobs[0]; assert.equal(job.kind, "compress"); assert.equal(job.items.length, 118);
-    assert(job.items.every(item => item.state === "completed" && item.resultSize < item.originalSize && item.after.length === 2));
-    assert.equal(referenceRequests.length - start, 4); assert.equal(renameAPITimings["/api/file/putFile"].calls, 123);
-    metrics.compress118 = { elapsedMs: Math.round(performance.now() - started), workspaceRequests: 4, journalWrites: 5, images: 118, sourceBytes: job.items.reduce((sum, item) => sum + item.originalSize, 0), outputBytes: job.items.reduce((sum, item) => sum + item.resultSize, 0), apiTimings: renameAPITimings };
+    assert(job.items.every(item => item.state === "completed" && item.resultSize < item.originalSize && item.operation === "replace-file" && item.oldPath === item.newPath));
+    assert.equal(referenceRequests.length - start, 0);
+    for (const item of job.items) {
+      assert.deepEqual(fs.readFileSync(path.join(workspace, item.backupDiskPath.slice(1))), fs.readFileSync(path.join(workspace, job.items[0].backupDiskPath.slice(1))));
+    }
+    metrics.compress118 = { elapsedMs: Math.round(performance.now() - started), workspaceRequests: 0, journalWrites: renameAPITimings["/api/file/putFile"].calls - 236, images: 118, sourceBytes: job.items.reduce((sum, item) => sum + item.originalSize, 0), outputBytes: job.items.reduce((sum, item) => sum + item.resultSize, 0), apiTimings: renameAPITimings };
     console.log("118-image compression: " + JSON.stringify(metrics.compress118));
     const restoreStart = referenceRequests.length;
     const history = page.locator(".syic-history > details").first(); await history.locator("summary").click();
-    await history.getByRole("button", { name: "Restore matching references", exact: true }).click();
+    await history.getByRole("button", { name: "Restore original image files", exact: true }).click();
     await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", undefined, { timeout: 120000 });
     await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled({ timeout: 30000 });
-    assert.equal(referenceRequests.length - restoreStart, 4);
+    assert.equal(referenceRequests.length - restoreStart, 0);
+    for (const item of job.items) assert.deepEqual(fs.readFileSync(path.join(workspace, item.oldDiskPath.slice(1))), fs.readFileSync(path.join(workspace, item.backupDiskPath.slice(1))));
     assert.equal((await readJournal()).jobs[0].state, "restored");
   });
   await check("native document scans resolve encoded notebook-local assets and retain rename recovery", async () => {
@@ -549,6 +572,51 @@ try {
     assert(!referenceRequests.slice(mutationStart).some(url => url.endsWith("relinkAsset")));
     assert.deepEqual(fs.readFileSync(path.join(workspace, "data", asset)), Buffer.from(source));
     assert.deepEqual(fs.readFileSync(path.join(workspace, "data", bookA, asset)), Buffer.from(source));
+  });
+  await check("history deletion removes only plugin backups and accepts missing backups without workspace scans", async () => {
+    messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/en_US.json"), "utf8"));
+    await page.reload(); await page.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready", { timeout: 30000 });
+    const journal = await readJournal();
+    const selected = journal.jobs.find(job => job.items.length === 1 && job.items[0].operation === "replace-file" && job.items[0].backupDiskPath);
+    assert(selected);
+    const currentFiles = new Map();
+    for (const job of journal.jobs) for (const item of job.items) for (const file of [item.oldDiskPath, item.newDiskPath]) {
+      if (!file?.startsWith("/data/")) continue;
+      const local = path.resolve(workspace, file.slice(1));
+      assert(local.startsWith(path.resolve(workspace, "data") + path.sep));
+      if (fs.existsSync(local)) currentFiles.set(local, fs.readFileSync(local));
+    }
+    const before = referenceRequests.length;
+    const history = page.locator(`.syic-history > details[data-job-id="${selected.id}"]`);
+    await history.locator("summary").click();
+    await history.getByRole("button", { name: "Delete task and backups", exact: true }).click();
+    let confirmation = page.locator(".syic-delete-history");
+    assert((await confirmation.textContent()).includes("can no longer be restored"));
+    await page.screenshot({ path: path.join(testRoot, "history-delete-confirmation.png"), fullPage: true });
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal((await readJournal()).jobs.length, journal.jobs.length);
+    assert(fs.existsSync(path.join(workspace, selected.items[0].backupDiskPath.slice(1))));
+    await history.getByRole("button", { name: "Delete task and backups", exact: true }).click();
+    await page.locator(".syic-delete-history").getByRole("button", { name: "Confirm deletion", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Task history and corresponding plugin backups were deleted.");
+    const remaining = (await readJournal()).jobs;
+    assert.equal(remaining.length, journal.jobs.length - 1); assert(!remaining.some(job => job.id === selected.id));
+    assert(!fs.existsSync(path.join(workspace, selected.items[0].backupDiskPath.slice(1))));
+    // Simulate a backup already removed by the user; its record must still clear.
+    const missing = remaining.flatMap(job => job.items).find(item => item.backupDiskPath && fs.existsSync(path.join(workspace, item.backupDiskPath.slice(1))));
+    assert(missing); await api("/api/file/removeFile", { path: missing.backupDiskPath });
+    await page.getByRole("button", { name: "Clear all history and backups", exact: true }).click();
+    confirmation = page.locator(".syic-delete-history");
+    assert((await confirmation.textContent()).includes(`Delete ${remaining.length} task records`));
+    await confirmation.getByRole("button", { name: "Confirm deletion", exact: true }).click();
+    await expect.poll(async () => (await readJournal()).jobs.length, { timeout: 30000 }).toBe(0);
+    await expect(page.getByRole("button", { name: "Clear all history and backups", exact: true })).toBeDisabled();
+    assert.equal(await page.locator(".syic-history > details").count(), 0);
+    assert.equal(fs.readdirSync(path.join(workspace, "data/storage/petal/sy-imgcompression/backups")).length, 0);
+    assert.equal(referenceRequests.length - before, 0);
+    for (const [file, bytes] of currentFiles) assert.deepEqual(fs.readFileSync(file), bytes);
+    await page.screenshot({ path: path.join(testRoot, "history-cleared.png"), fullPage: true });
   });
   if (process.env.SYIC_GENERATE_GUIDE === "1") {
     const languages = (process.env.SYIC_GUIDE_LANGUAGE || "zh_CN,en_US").split(",");

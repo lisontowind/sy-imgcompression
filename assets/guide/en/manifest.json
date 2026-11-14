@@ -1,7 +1,7 @@
 {
   "source": "Production plugin + isolated SiYuan kernel + browser host adapter; annotations added in the capture page.",
   "language": "en_US",
-  "documentId": "20261018165452-a9yfkmx",
+  "documentId": "20261114131010-n42jwnb",
   "images": [
     {
       "file": "01-batch-compression.png",
@@ -29,7 +29,7 @@
       "notes": [
         [
           "Adjust this image",
-          "Set quality, format, scale or a pixel limit. This example scales the cover image to 50%."
+          "Keep the original format and set quality, scale or a pixel limit. PNG uses lossless optimisation. This example scales the cover to 50%."
         ],
         [
           "Save an override",
@@ -57,7 +57,7 @@
         ],
         [
           "Apply from the main panel",
-          "Previewing leaves references unchanged. Return to the main panel and apply to write files and update references."
+          "Previewing never writes images. Apply from the main panel to back up and overwrite each image in place, without scanning or rewriting references."
         ]
       ],
       "width": 1600,
@@ -93,7 +93,7 @@
         ],
         [
           "Save your preferences",
-          "Quick settings are saved independently of the batch panel. This example uses Balanced, WebP and 75% scale."
+          "Quick settings are saved independently of the batch panel. This example uses Balanced, original format and 75% scale."
         ],
         [
           "Choose a useful size",
@@ -105,19 +105,19 @@
     },
     {
       "file": "06-history-recovery.png",
-      "title": "Review tasks and recover references",
+      "title": "Review tasks, restore or clean up",
       "notes": [
         [
           "Review each result",
           "Task history lists source and target paths, with completed, skipped or failed states for each image."
         ],
         [
-          "Restore matching references",
-          "Recovery verifies files and references. Later edits or new references block a conflicting recovery."
+          "Restore original image files",
+          "Recovery verifies the image and backup hashes. Later image edits block recovery to preserve newer content."
         ],
         [
-          "Keep originals for recovery",
-          "Originals are never deleted automatically. When recovery is no longer needed, review unreferenced assets in SiYuan."
+          "Delete backups and history",
+          "When recovery is no longer needed, delete one task or clear all history and backups after confirmation. Current images are retained."
         ]
       ],
       "width": 1600,
