@@ -1,9 +1,12 @@
 import { fileExists } from "../api";
 import { inspectImage } from "../compression/image-info";
-import { AssetIdentity, AssetJob, CompressionOptions, CompressionResult, JobItem, Kernel, Progress, UserError } from "../types";
+import { AssetIdentity, AssetJob, CompressionOptions, CompressionResult, JobItem, Kernel, Progress, QuickCompressionMode, UserError } from "../types";
 import { assetDiskPath } from "./paths";
 import { digest } from "./references";
 import { checkCancelled } from "./cancellation";
+import { newNodeId } from "./naming";
+import { copyFiles } from "./copy-files";
+import { applyDocumentCopy } from "./document-references";
 
 export const BACKUP_ROOT = "/data/storage/petal/sy-imgcompression/backups/";
 const BATCH_FILES = 128, BATCH_OUTPUT_BYTES = 32 * 1024 * 1024;
@@ -32,9 +35,12 @@ export async function restoreFile(kernel: Kernel, item: JobItem, signal?: AbortS
 export async function compressFiles(kernel: Kernel, job: AssetJob, assets: AssetIdentity[], context: {
   readSource(asset: AssetIdentity): Promise<ArrayBuffer>;
   encode(source: ArrayBuffer, options: CompressionOptions): Promise<CompressionResult>;
+  restore(items: JobItem[]): Promise<void>;
+  mode?: QuickCompressionMode;
   save(): Promise<void>; checkCancelled(): void; progress(progress: Progress): void; signal?: AbortSignal;
 }): Promise<void> {
   let pending: { asset: AssetIdentity; item: JobItem; bytes: ArrayBuffer }[] = [], outputBytes = 0;
+  const byPath = new Map(assets.map(asset => [asset.path, asset]));
   const progress = (item: JobItem, stage: string) => context.progress({
     done: job.items.filter(item => ["completed", "skipped"].includes(item.state)).length,
     total: assets.length, path: item.oldPath, stage,
@@ -42,11 +48,13 @@ export async function compressFiles(kernel: Kernel, job: AssetJob, assets: Asset
   const flush = async () => {
     if (!pending.length) return;
     context.checkCancelled();
-    for (const { item } of pending) item.state = "applying";
+    const replacements = pending.filter(entry => entry.item.operation === "replace-file");
+    const copies = pending.filter(entry => entry.item.operation !== "replace-file");
+    for (const { item } of replacements) item.state = "applying";
     // Persist every backup and planned hash before the first overwrite. A crash
     // can leave some originals untouched; restoreFile recognises those hashes.
-    await context.save();
-    for (const { asset, item, bytes } of pending) {
+    if (replacements.length) await context.save();
+    for (const { asset, item, bytes } of replacements) {
       let writing = false;
       try {
         context.checkCancelled();
@@ -68,7 +76,14 @@ export async function compressFiles(kernel: Kernel, job: AssetJob, assets: Asset
         await context.save(); throw error;
       }
     }
-    pending = []; outputBytes = 0; await context.save();
+    if (replacements.length) await context.save();
+    if (copies.length) {
+      if (context.mode === "document") {
+        for (const { item, bytes } of copies) await applyDocumentCopy(kernel, job, item, bytes, context);
+      } else await copyFiles(kernel, job, byPath, copies.map(entry => entry.item), context,
+        new Map(copies.map(entry => [entry.asset.path, entry.bytes])));
+    }
+    pending = []; outputBytes = 0;
   };
   for (let index = 0; index < assets.length; index++) {
     const asset = assets[index], item = job.items[index];
@@ -81,14 +96,22 @@ export async function compressFiles(kernel: Kernel, job: AssetJob, assets: Asset
       const result = await context.encode(source.slice(0), item.compressionOptions!);
       context.checkCancelled(); item.resultSize = result.bytes.byteLength;
       if (result.bytes.byteLength >= source.byteLength) { item.state = "skipped"; item.error = "noSavings"; continue; }
-      if (inspectImage(result.bytes).format !== info.format || result.mime !== info.mime) throw new UserError("writeVerificationFailed");
+      const expectedFormat = item.compressionOptions!.format === "webp" ? "webp" : info.format;
+      if (inspectImage(result.bytes).format !== expectedFormat || result.mime !== `image/${expectedFormat}`
+          || result.extension !== (expectedFormat === "jpeg" ? ".jpg" : "." + expectedFormat)) throw new UserError("writeVerificationFailed");
       item.targetDigest = await digest(result.bytes);
-      item.backupDiskPath = `${BACKUP_ROOT}${job.id}-${index}${asset.extension}`;
-      progress(item, "backingUp");
-      if (await fileExists(kernel, item.backupDiskPath)) throw new UserError("filenameConflict");
-      context.checkCancelled();
-      await kernel.putFile(item.backupDiskPath, source);
-      context.checkCancelled();
+      const replace = context.mode === "in-place" || (!context.mode && expectedFormat === info.format);
+      if (replace) {
+        if (expectedFormat !== info.format) throw new UserError("invalidCompression");
+        item.operation = "replace-file"; item.newPath = item.oldPath; item.newDiskPath = item.oldDiskPath;
+        item.backupDiskPath = `${BACKUP_ROOT}${job.id}-${index}${asset.extension}`;
+        progress(item, "backingUp");
+        if (await fileExists(kernel, item.backupDiskPath)) throw new UserError("filenameConflict");
+        context.checkCancelled(); await kernel.putFile(item.backupDiskPath, source); context.checkCancelled();
+      } else {
+        item.operation = context.mode === "document" ? "document-references" : undefined;
+        item.newPath = `assets/image-${newNodeId()}${result.extension}`; item.newDiskPath = "/data/" + item.newPath;
+      }
       item.state = "prepared"; pending.push({ asset, item, bytes: result.bytes }); outputBytes += result.bytes.byteLength;
     } catch (error) {
       item.error = error instanceof UserError ? error.code : String(error);

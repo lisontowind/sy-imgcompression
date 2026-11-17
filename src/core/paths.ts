@@ -30,6 +30,10 @@ export function extensionOf(path: string): string {
   return i > 0 ? name.slice(i) : "";
 }
 export const isImageExtension = (ext: string): boolean => /^\.(?:jpe?g|png|webp)$/i.test(ext);
+export function imageFormatName(path: string, unknown: string): string {
+  const ext = extensionOf(path).slice(1).toLowerCase();
+  return !ext ? unknown : /^(jpg|jpeg)$/.test(ext) ? "JPEG" : ext === "webp" ? "WebP" : ext.toUpperCase();
+}
 export const isImageAttachment = (ext: string): boolean => /^\.(?:jpe?g|png|webp|gif|apng|svg|avif|heic|heif|bmp|tiff?|ico)$/i.test(ext);
 export const assetURL = (path: string): string => "/" + requestPath(path);
 

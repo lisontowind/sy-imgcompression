@@ -1,7 +1,7 @@
 import { fileExists } from "../api";
 import { CompressionClient } from "../compression/client";
 import { MAX_BYTES, validateCompression } from "../compression/image-info";
-import { AssetIdentity, AssetJob, CompressionOptions, CompressionResult, DocumentAssets, JobItem, JobKind, Journal, Kernel, Progress, RenameOptions, UserError } from "../types";
+import { AssetIdentity, AssetJob, CompressionOptions, CompressionResult, DocumentAssets, JobItem, JobKind, Journal, Kernel, Progress, QuickCompressionMode, RenameOptions, UserError } from "../types";
 import { imageRename, newNodeId, validateFilename } from "./naming";
 import { basename, isImageAttachment, isImageExtension } from "./paths";
 import { cloneOptions } from "./settings";
@@ -12,6 +12,7 @@ import { compressFiles, restoreFile } from "./compress-files";
 import { restoreBatch } from "./restore-batch";
 import { checkCancelled as checkSignal } from "./cancellation";
 import { deleteBackup, planHistoryDeletion } from "./delete-history";
+import { restoreDocumentCopy } from "./document-references";
 
 export interface JournalStore { load(): Promise<Journal | undefined>; save(journal: Journal): Promise<void> }
 export interface Compressor { compress(bytes: ArrayBuffer, options: CompressionOptions): Promise<CompressionResult>; cancel(): void }
@@ -70,7 +71,7 @@ export class JobManager {
       this.checkCancelled();
       asset.previewDigest = await digest(source);
       this.checkCancelled();
-      const result = await this.compressor.compress(source.slice(0), { ...cloneOptions(options), format: "original" });
+      const result = await this.compressor.compress(source.slice(0), cloneOptions(options));
       this.checkCancelled();
       return { source, result };
     } finally { this.previewController = undefined; this.busy = false; }
@@ -85,15 +86,17 @@ export class JobManager {
     if (bytes.byteLength !== asset.size) throw new UserError("sourceChanged", asset.path);
     return bytes;
   }
-  async run(document: DocumentAssets, kind: JobKind, options: CompressionOptions | RenameOptions, perImage: ReadonlyMap<string, CompressionOptions> = new Map()): Promise<AssetJob> {
+  async run(document: DocumentAssets, kind: JobKind, options: CompressionOptions | RenameOptions, perImage: ReadonlyMap<string, CompressionOptions> = new Map(), mode?: QuickCompressionMode): Promise<AssetJob> {
     return this.exclusive(async () => {
       if (kind === "rename") assignRenamePaths(document.assets, document.title, options as RenameOptions);
       const assets = document.assets.filter(asset => asset.selected && !asset.blockers.length && (kind === "compress" ? isImageExtension(asset.extension) : isImageAttachment(asset.extension) && asset.newPath !== asset.path));
       if (!assets.length) throw new UserError(kind === "rename" ? "noChanges" : "selectAssets");
-      const effective = new Map(assets.map(asset => [asset.path, kind === "compress" ? { ...cloneOptions(perImage.get(asset.path) || options as CompressionOptions), format: "original" as const } : undefined]));
+      if (mode && !["in-place", "document", "workspace"].includes(mode)) throw new UserError("invalidCompression");
+      const effective = new Map(assets.map(asset => [asset.path, kind === "compress" ? cloneOptions(perImage.get(asset.path) || options as CompressionOptions) : undefined]));
       for (const value of effective.values()) if (value) validateCompression(value);
+      if (mode === "in-place" && [...effective.values()].some(value => value?.format !== "original")) throw new UserError("invalidCompression");
       const job: AssetJob = { schema: 1, id: newNodeId(), kind, documentId: document.id, documentTitle: document.title,
-        created: new Date().toISOString(), state: "running", options: kind === "compress" ? { ...cloneOptions(options as CompressionOptions), format: "original" } : { ...options },
+        created: new Date().toISOString(), state: "running", options: kind === "compress" ? cloneOptions(options as CompressionOptions) : { ...options },
         items: assets.map(asset => ({ oldPath: asset.path, newPath: kind === "compress" ? asset.path : asset.newPath || "", oldDiskPath: asset.diskPath,
           newDiskPath: kind === "compress" ? asset.diskPath : "", state: "pending", before: [], plannedAfter: [], originalSize: asset.size,
           ...(kind === "compress" ? { operation: "replace-file" as const, compressionOptions: effective.get(asset.path) } : {}) })) };
@@ -103,6 +106,7 @@ export class JobManager {
         if (kind === "compress") {
           await compressFiles(this.kernel, job, assets, {
             save: () => this.save(), checkCancelled: () => this.checkCancelled(),
+            restore: items => this.restoreItems(items, true), mode,
             readSource: asset => this.readSource(asset, true), encode: (source, settings) => this.compressor.compress(source, settings),
             progress: progress => this.onProgress?.(progress), signal: this.jobController?.signal,
           });
@@ -228,6 +232,15 @@ export class JobManager {
   }
   private async restoreItems(items: JobItem[], recovery = false): Promise<void> {
     let firstError: unknown;
+    for (const item of items.filter(item => item.operation === "document-references")) {
+      if (!recovery) this.checkCancelled();
+      try { await restoreDocumentCopy(this.kernel, item, () => this.save(), recovery ? undefined : this.jobController?.signal); }
+      catch (error) {
+        item.state = "recovery-required"; item.error = String(error); await this.save();
+        if (!recovery) throw error;
+        firstError ??= error;
+      }
+    }
     for (const item of items.filter(item => item.operation === "replace-file")) {
       if (!recovery) this.checkCancelled();
       // A repeated recovery recognises an already restored file by its hash.
@@ -238,7 +251,7 @@ export class JobManager {
         firstError ??= error;
       }
     }
-    items = items.filter(item => item.operation !== "replace-file");
+    items = items.filter(item => !item.operation);
     for (let offset = 0; offset < items.length; offset += BATCH_FILES) {
       const batch = items.slice(offset, offset + BATCH_FILES);
       if (!recovery) this.checkCancelled();

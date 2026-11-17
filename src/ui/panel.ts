@@ -275,7 +275,7 @@ export class AttachmentPanel {
     const selected = this.document.assets.filter(asset => asset.selected && this.available(asset));
     const refs = selected.flatMap(asset => asset.references), books = new Set(refs.map(ref => ref.notebook).filter(Boolean));
     const docs = new Set(refs.map(ref => ref.rootID).filter(Boolean));
-    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", this.mode === "compress" ? this.t("inPlaceHint") : selected.some(asset => asset.referencesLoaded === false) ? this.t("referencesDeferred") : this.t("impact", {
+    this.summary.append(element("div", "syic-selected", this.t("selected", { count: selected.length })), element("div", "syic-impact", this.mode === "compress" ? this.t("compressionModesHint") : selected.some(asset => asset.referencesLoaded === false) ? this.t("referencesDeferred") : this.t("impact", {
       refs: refs.length, docs: docs.size, books: books.size, closed: this.document.notebooks.filter(book => book.closed && books.has(book.id)).length,
     })));
     this.updateButtons();
@@ -373,7 +373,7 @@ export class AttachmentPanel {
   private effective(asset: AssetIdentity): CompressionOptions { return cloneOptions(this.perImage.get(asset.path)?.options || this.options); }
   private editQuick(): void {
     this.releasePreview();
-    const panel = quickSettingsDialog(this.services?.settings.quick || defaultProfile(), this.t, async profile => {
+    const panel = quickSettingsDialog(this.services?.settings.quick || { ...defaultProfile(), mode: "in-place" }, this.t, async profile => {
       await this.services?.save("quick", profile); this.message(this.t("settingsSaved"));
     }, () => { if (this.child === panel) this.child = undefined; });
     this.child = panel;
@@ -521,10 +521,10 @@ export class AttachmentPanel {
         if (job.deleting) details.querySelector("summary")!.textContent += ` · ${this.t("deletionPending")}`;
         if (details.open) {
         for (const item of job.items) {
-          const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n${item.operation === "replace-file" ? this.t("inPlaceCompression") : `→ ${item.newPath || "—"}`}${item.backupDiskPath ? `\n${this.t("backup")}: ${item.backupDiskPath}` : ""}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
+          const text = element("div", "syic-job-item", `${this.t(item.state)} · ${item.oldPath}\n${item.operation === "replace-file" ? this.t("inPlaceCompression") : `${job.kind === "compress" ? this.t(item.operation === "document-references" ? "mode-document" : "mode-workspace") + "\n" : ""}→ ${item.newPath || "—"}`}${item.backupDiskPath ? `\n${this.t("backup")}: ${item.backupDiskPath}` : ""}${item.error ? `\n${this.t(item.error)}` : ""}`); details.append(text);
         }
         if (!job.deleting && job.items.some(item => ["completed", "applying", "recovery-required"].includes(item.state))) {
-          const restore = this.button(this.t(job.items.some(item => item.operation === "replace-file") ? "restoreImage" : "restore"), async () => {
+          const restore = this.button(this.t(job.items.some(item => item.operation === "document-references") || (job.items.some(item => item.operation === "replace-file") && job.items.some(item => !item.operation)) ? "restoreTask" : job.items.some(item => item.operation === "replace-file") ? "restoreImage" : "restore"), async () => {
             if (this.working || this.manager.busy) return;
             this.working = true; this.updateButtons();
             try { await this.manager.restore(job); this.message(this.t("restored")); }

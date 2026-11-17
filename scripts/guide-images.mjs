@@ -122,7 +122,7 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   }
   await child.locator('.syic-original').evaluate(image => image.decode());
   await capture({ number: '02', file: '02-individual-settings.png', title: '每张图片，都可以单独设置', subtitle: '不同图片使用不同参数，不必反复拆成多次批量任务。', notes: [
-    ['设置当前图片', '保持原格式，可单独设置质量、比例或像素限制；PNG 使用无损优化。示例将封面缩小到 50%。'],
+    ['设置当前图片', '可选原格式或 WebP，单独设置质量、比例或像素限制；原格式 PNG 使用无损优化。示例缩小到 50%。'],
     ['保存独立配置', '保存后该图片不再继承全局参数。其他未单独设置的图片仍跟随全局配置。'],
     ['核对预计尺寸', '上方显示原尺寸与预计输出尺寸。缩放始终保持比例、不放大；保存后可在列表中恢复继承。'],
   ] }, [child.locator('.syic-profile'), child.getByRole('button', { name: messages.saveSettings, exact: true }), child.locator('.syic-expected')]);
@@ -139,7 +139,7 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
   await capture({ number: '03', file: '03-compression-preview.png', title: '先看压缩对比，再决定应用', subtitle: '预览在独立子面板中完成，查看原图本身不会触发压缩。', notes: [
     ['点击才生成预览', '只有点击“生成压缩预览”才运行压缩。调整参数后，需要再次点击重新生成。'],
     ['对比尺寸和体积', '同时查看原图与压缩结果，核对输出尺寸、文件大小以及本次文件缩减量。'],
-    ['预览不会写回图片', '确认效果后，回到主面板点击“应用到选中附件”，才会备份并原位写回；不扫描或改写引用。'],
+    ['预览不会写回图片', '确认后回到主面板应用。此原格式示例备份后原位写回；转 WebP 则另存并更新全部引用。'],
   ] }, [child.getByRole('button', { name: messages.generatePreview, exact: true }), child.locator('.syic-preview-state'), child.locator('.syic-preview figure').last()]);
   await page.evaluate(() => window.__dialogs.at(-1).destroy());
   await revealMain();
@@ -162,12 +162,15 @@ export async function createGuide({ page, api, put, root, bookA, pdfPath, setAct
     window.__events['open-menu-image']({ detail: { menu: { addItem: item => items.push(item) }, element: image, protyle: { block: { rootID: id }, disabled: false } } });
     items.find(item => item.label === quickSettings).click();
   }, { id: documentId, asset: assets[0][0], quickSettings: messages.quickSettings });
-  child = page.locator('.syic-quick-settings'); await child.getByLabel(messages.resizeMode, { exact: true }).selectOption('75');
+  child = page.locator('.syic-quick-settings');
+  await child.getByLabel(messages.processingMode, { exact: true }).selectOption('document');
+  await child.getByLabel(messages.format, { exact: true }).selectOption('webp');
+  await child.getByLabel(messages.resizeMode, { exact: true }).selectOption('75');
   await capture({ number: '05', compact: true, file: '05-quick-compression.png', title: '右键快捷压缩，配置独立保存', subtitle: '先保存常用参数，之后右键点“快捷压缩”即可直接执行。', notes: [
-    ['独立的选项框', '图片右键菜单和主面板都能打开“快捷压缩配置”，无需先进入附件列表。'],
-    ['保存常用参数', '这里的设置与批量压缩面板分开保存。示例使用均衡、保持原格式和 75% 尺寸。'],
-    ['选择常用尺寸', '比例和像素限制都保持宽高比。保存后右键“快捷压缩”会直接执行，并写入任务记录。'],
-  ] }, [child.locator('.syic-settings-box'), child.getByRole('button', { name: messages.saveSettings, exact: true }), child.getByLabel(messages.resizeMode, { exact: true })]);
+    ['选择处理方式', '可原位覆盖、仅当前文档另存或更新全部引用。原位覆盖只支持保持原格式。'],
+    ['选择格式与尺寸', '示例为仅当前文档、WebP、75% 尺寸。保留原图与其他文档，跳过共享数据库和外部嵌入。'],
+    ['保存后右键执行', '配置独立于主面板保存。之后右键“快捷压缩”直接执行，并记录任务与恢复信息。'],
+  ] }, [child.getByLabel(messages.processingMode, { exact: true }), child.getByLabel(messages.format, { exact: true }), child.getByRole('button', { name: messages.saveSettings, exact: true })]);
   await child.getByRole('button', { name: messages.saveSettings, exact: true }).click();
 
   await page.evaluate(() => window.__open()); await ready();

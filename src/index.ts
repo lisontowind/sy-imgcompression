@@ -3,13 +3,13 @@ import type { IEventBusMap, IProtyle, subMenu } from "siyuan";
 import { SiYuanKernel } from "./api";
 import { JobManager } from "./core/jobs";
 import { documentStats, scanDocument } from "./core/assets";
-import { cloneProfile, loadSettings } from "./core/settings";
-import { assetURL, extensionOf, isImageExtension, normalizeAssetURL } from "./core/paths";
+import { cloneProfile, cloneQuickProfile, loadSettings } from "./core/settings";
+import { assetURL, extensionOf, imageFormatName, isImageExtension, normalizeAssetURL } from "./core/paths";
 import { translator, Translator } from "./i18n";
 import { AttachmentPanel } from "./ui/panel";
 import { ChildPanel } from "./ui/viewers";
 import { quickSettingsDialog } from "./ui/quick-settings";
-import { CompressionProfile, JobKind, Journal, UserError } from "./types";
+import { CompressionProfile, QuickCompressionProfile, JobKind, Journal, UserError } from "./types";
 import { formatSize, statsText } from "./ui/common";
 import { checkCancelled } from "./core/cancellation";
 import "./index.css";
@@ -42,7 +42,7 @@ export default class ImageCompressionPlugin extends Plugin {
         this.api.post<{ size: number }>("/api/asset/statAsset", { path: target }, signal).then(stat => Number.isSafeInteger(stat?.size) && stat.size >= 0 ? formatSize(stat.size) : this.t("unknownSize")).catch(() => this.t("unknownSize")),
         this.dimensions(target, image, signal),
       ]);
-      return `${dimensions} · ${size}`;
+      return `${imageFormatName(target, this.t("unknownFormat"))} · ${dimensions} · ${size}`;
     });
     if (this.readonly(protyle)) return;
     menu.addItem({ icon: "iconSyicCompress", label: this.t("compressImage"), click: () => { void this.open("compress", protyle, target); } });
@@ -124,10 +124,11 @@ export default class ImageCompressionPlugin extends Plugin {
     try { await this.panel.start(); } catch (error) { showMessage(this.t(error instanceof UserError ? error.code : "error"), 7000, "error"); }
   }
   private saveProfile(key: "global" | "quick", profile: CompressionProfile): Promise<void> {
-    const snapshot = cloneProfile(profile);
+    const snapshot = key === "quick" ? cloneQuickProfile(profile as QuickCompressionProfile) : cloneProfile(profile);
     this.settingsQueue = this.settingsQueue.catch(() => {}).then(async () => {
       const next = { ...this.settings, [key]: snapshot };
-      await this.saveData("settings.json", next); this.settings[key] = snapshot;
+      await this.saveData("settings.json", next);
+      if (key === "quick") this.settings.quick = snapshot as QuickCompressionProfile; else this.settings.global = snapshot;
     });
     return this.settingsQueue;
   }
@@ -150,11 +151,11 @@ export default class ImageCompressionPlugin extends Plugin {
       previous?.(value); showMessage(`${this.t(value.stage)} ${value.done}/${value.total}`, 3000);
     };
     try {
-      showMessage(this.t("scanning")); const options = cloneProfile(this.settings.quick).options;
-      const doc = await scanDocument(this.api, protyle.block.rootID || "", path, undefined, controller.signal, false);
+      showMessage(this.t("scanning")); const profile = cloneQuickProfile(this.settings.quick), options = profile.options;
+      const doc = await scanDocument(this.api, protyle.block.rootID || "", path, undefined, controller.signal, false, profile.mode !== "document");
       if (this.unloaded) return;
       manager.onProgress = progress;
-      const job = await manager.run(doc, "compress", options);
+      const job = await manager.run(doc, "compress", options, undefined, profile.mode);
       const item = job.items[0];
       showMessage(`${this.t("quickCompress")} · ${this.t(item.error || item.state)}${item.state === "completed" ? ` · ${formatSize(item.originalSize)} → ${formatSize(item.resultSize!)}` : ""}`, 7000);
     } catch (error) { showMessage(this.t(error instanceof UserError ? error.code : "error"), 7000, "error"); }

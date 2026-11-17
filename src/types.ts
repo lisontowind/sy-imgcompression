@@ -6,7 +6,9 @@ export interface CompressionOptions {
   resize?: { mode: ResizeMode; value: number };
 }
 export interface CompressionProfile { preset: "90" | "82" | "70" | "custom"; options: CompressionOptions }
-export interface PluginSettings { schema: 1; global: CompressionProfile; quick: CompressionProfile }
+export type QuickCompressionMode = "in-place" | "document" | "workspace";
+export interface QuickCompressionProfile extends CompressionProfile { mode: QuickCompressionMode }
+export interface PluginSettings { schema: 1; global: CompressionProfile; quick: QuickCompressionProfile }
 // Persisted key retained for existing task journals; ASCII costs 1.5 budget units.
 export interface RenameOptions { documentNameMaxBytes: number; prefix?: string }
 export interface Notebook { id: string; name: string; closed: boolean }
@@ -32,13 +34,16 @@ export interface DocumentAssets { id: string; title: string; notebooks: Notebook
 export interface CompressionResult { bytes: ArrayBuffer; mime: string; extension: string; width: number; height: number; originalWidth: number; originalHeight: number }
 export type ItemState = "pending" | "prepared" | "applying" | "completed" | "skipped" | "failed" | "recovery-required" | "restored";
 export interface JobItem {
-  operation?: "replace-file";
+  operation?: "replace-file" | "document-references";
+  documentId?: string;
+  documentChanges?: DocumentChange[];
   backupDiskPath?: string;
   oldPath: string; newPath: string; oldDiskPath: string; newDiskPath: string;
   state: ItemState; before: AssetReference[]; plannedAfter: AssetReference[]; after?: AssetReference[];
   error?: string; originalSize: number; resultSize?: number; sourceDigest?: string; targetDigest?: string;
   historyPath?: string; compressionOptions?: CompressionOptions;
 }
+export interface DocumentChange { blockID: string; kind: "dom" | "title-img"; before: string; after: string; verified?: string }
 export interface AssetJob {
   deleting?: boolean;
   schema: 1; id: string; kind: JobKind; documentId: string; documentTitle: string;

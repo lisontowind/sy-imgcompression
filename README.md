@@ -27,14 +27,16 @@ are persisted in `settings.json`; quick compression also uses the durable job jo
 
 Opening menus, listing or refreshing attachments, and generating compression previews
 do not query workspace references. Reference details load on demand for one attachment
-and are reused until the next document scan. Single, quick and batch compression and
-their recovery never query or migrate references. Renaming and recovery of older
-reference-migration jobs still verify fresh workspace references.
+and are reused until the next document scan. In-place compression and recovery never
+query or migrate references. WebP conversion and save-a-copy operations that update
+all references verify fresh workspace references. Current-document-only copies and
+their recovery use document-scoped edits without workspace reference requests.
 
-Compression supports static JPEG/PNG/WebP and always retains each file's path,
-name and original format. A verified backup is saved before a smaller result
-overwrites the file; every reference to that file displays the compressed image.
-Older WebP-output settings migrate to original format. JPEG/WebP support presets
+Compression supports static JPEG/PNG/WebP with original-format and WebP output.
+In the main panel, original-format compression saves a verified backup and overwrites
+in place; all shared references display the result. JPEG/PNG-to-WebP conversion saves
+a new attachment and migrates all references, retaining the original. Existing WebP
+images are compressed in place. JPEG/WebP support presets
 90/82/70 (default 82), an explicit Custom preset, and optional downscaling. Choose
 original dimensions, 75/50/25%, a custom percentage (1–100), or an advanced width,
 height or longest-edge limit. All resizing preserves aspect ratio and never enlarges.
@@ -49,6 +51,18 @@ optimisation when not resized. Animated images, external URLs, unsupported forma
 images above 50 MiB or 40 million pixels, and results with no savings are skipped.
 An image worker is terminated after every image to release its codec memory.
 
+Quick settings independently save one of three processing modes:
+
+- **Overwrite in place**: original format only; back up and overwrite without a workspace scan. All documents sharing the image display the result.
+- **Save a copy, current document only**: original format or WebP; retain the original and update only owned body images, links, HTML and title images. Shared database fields and external embeds are skipped. No workspace scan; no eligible references means the operation is skipped.
+- **Save a copy, update all references**: original format or WebP; retain the original and verify and migrate all workspace references.
+
+Defaults are original format and overwrite in place. Legacy quick settings without a
+mode use overwrite for original format and save-a-copy/update-all for WebP.
+Image context menus show extension-derived format, dimensions and size without extra
+image data reads. Current-document recovery checks affected blocks and attributes,
+and refuses to overwrite subsequent edits. Retain task history and recovery files.
+
 Renaming applies only to images. Set a batch filename prefix (default `image`), or
 override the name portion of individual images in the table. Individual names survive
 batch prefix changes; clear an individual name or choose Use batch prefix to inherit.
@@ -58,7 +72,7 @@ session; rescanning clears individual names.
 A complete terminal ID (14-digit timestamp and seven lowercase letters/digits) is
 retained; otherwise a new ID is generated. Already normalized images need no changes.
 PDF and other non-image files are excluded. Conflicting destinations are skipped,
-never overwritten. Compression does not generate a new attachment name.
+never overwritten. Save-a-copy compression uses `assets/image-<SiYuan ID>.<output extension>`.
 Old journals, including document-prefix renames, remain recoverable.
 
 Attachment lists resolve only the current document's files and database assets,
@@ -98,8 +112,8 @@ rows, thumbnails and expanded history content.
 The illustrations below use the actual plugin interface with example documents.
 Guide and promotional images are hosted in the repository and require an internet
 connection to view. Image compression itself remains fully offline.
-The illustrations use the 0.1.8 interface, including original-format compression,
-image restoration and backup-history cleanup.
+The illustrations use the 0.1.9 interface, including output formats, quick processing
+modes, image restoration and backup-history cleanup.
 
 1. Choose batch settings and review attachment totals before applying.
 
@@ -137,7 +151,7 @@ Expand a task in Task history & recovery to choose Delete task and backups, or
 use Clear all history and backups to include older hidden records. Confirmation
 removes only the selected records and their generated files in the plugin backup
 folder. Current images, references, SiYuan data history and snapshots are retained.
-Attachments left in `assets` by older tasks remain managed by SiYuan. Legacy
+Original and output attachments in `assets` from copies, renames and older tasks remain managed by SiYuan. Legacy
 records can be removed even after unused-asset cleanup deleted their originals.
 Deletion gives up recovery for those tasks. Partial failures retain records with
 Continue deletion; recovery is disabled once cleanup starts. Cleanup can resume

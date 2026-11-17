@@ -23,6 +23,7 @@ it("offers percentage and single pixel controls while preserving PNG lossless st
   expect(profile.options.resize).toEqual({ mode: "percent", value: 60 });
   change(root, "Resize mode", "longestEdge"); change(root, "Pixel limit (px)", "1200");
   expect(root.querySelector('[aria-label="Scale (%)"]')).toBeNull(); expect(profile.options.resize).toEqual({ mode: "longestEdge", value: 1200 });
+  change(root, "Output format", "webp"); expect(root.querySelector<HTMLInputElement>('[aria-label="Quality"]')!.disabled).toBe(false);
   change(root, "Output format", "original"); expect(root.querySelector<HTMLInputElement>('[aria-label="Quality"]')!.disabled).toBe(true);
 });
 it("keeps persisted quick/global profiles independent and rejects invalid settings", () => {
@@ -30,13 +31,21 @@ it("keeps persisted quick/global profiles independent and rejects invalid settin
   expect(settings.quick.options.resize!.value).toBe(100);
   const copy = loadSettings(JSON.parse(JSON.stringify(settings))); expect(copy.global).toEqual(settings.global);
   const draft = cloneProfile(copy.quick); draft.options.quality = 10; expect(copy.quick.options.quality).toBe(82);
-  expect(loadSettings({ schema: 1, quick: { preset: "custom", options: { quality: -1 } } }).quick).toEqual(defaultProfile());
+  expect(loadSettings({ schema: 1, quick: { preset: "custom", options: { quality: -1 } } }).quick).toEqual({ ...defaultProfile(), mode: "in-place" });
 });
-it("migrates WebP output settings to original-format compression and locks the format control", () => {
+it("preserves WebP settings and offers both formats", () => {
   const settings = loadSettings(undefined); settings.quick.options.format = "webp";
-  const loaded = loadSettings(settings); expect(loaded.quick.options.format).toBe("original");
+  settings.quick.mode = "workspace";
+  const loaded = loadSettings(settings); expect(loaded.quick.options.format).toBe("webp");
   const root = document.createElement("div"); profileEditor(root, loaded.quick, t, () => {});
   const format = root.querySelector<HTMLSelectElement>('[aria-label="Output format"]')!;
-  expect(format.value).toBe("original"); expect(format.disabled).toBe(true);
-  expect(root.textContent).toContain("Every reference to the same file");
+  expect(format.value).toBe("webp"); expect(format.disabled).toBe(false); expect(format.options).toHaveLength(2);
+});
+it("migrates missing quick modes without losing the saved output format", () => {
+  const settings = loadSettings(undefined);
+  const legacy = JSON.parse(JSON.stringify(settings)); delete legacy.quick.mode;
+  expect(loadSettings(legacy).quick.mode).toBe("in-place");
+  legacy.quick.options.format = "webp";
+  expect(loadSettings(legacy).quick).toMatchObject({ mode: "workspace", options: { format: "webp" } });
+  expect(settings.quick).toMatchObject({ mode: "in-place", options: { format: "original" } });
 });

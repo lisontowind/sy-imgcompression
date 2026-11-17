@@ -34,6 +34,7 @@ async function readJournal() {
   assert.equal(response.status, 200); return response.json();
 }
 async function check(name, fn) {
+  if (process.env.SYIC_SCOPE_ONLY === "1" && !name.startsWith("quick copy modes")) return;
   if (process.env.SYIC_GUIDE_ONLY === "1" || (process.env.SYIC_BATCH_ONLY === "1" && !name.startsWith("118 images"))) return;
   await fn(); results.push(name); console.log("PASS " + name);
 }
@@ -154,9 +155,9 @@ try {
   await check("built plugin opens compression first and scans one shared file", async () => {
     assert.equal(await page.getByRole("tab", { name: "Image compression", exact: true }).getAttribute("aria-selected"), "true");
     assert.equal(await page.locator("tbody tr").count(), 1);
-    assert((await page.locator(".syic-summary").textContent()).includes("no workspace reference scan"));
+    assert((await page.locator(".syic-summary").textContent()).includes("without a workspace scan"));
     assert.equal(await page.getByLabel("Output format", { exact: true }).inputValue(), "original");
-    assert(await page.getByLabel("Output format", { exact: true }).isDisabled());
+    assert(await page.getByLabel("Output format", { exact: true }).isEnabled());
     assert.equal(referenceRequests.length, 0, "opening the panel must not scan workspace references");
     assert((await page.locator(".syic-total").textContent()).includes("Document attachment total:"));
   });
@@ -171,7 +172,7 @@ try {
     const openReference = page.locator(".syic-ref button").filter({ hasText: "Plugin fixture A" }).first();
     await openReference.click(); await page.locator('.syic-reader[data-readonly="true"] img').first().waitFor();
     assert.equal(referenceRequests.length, 1, "only the explicitly opened attachment should be queried");
-    assert((await page.locator(".syic-summary").textContent()).includes("Every reference to the same file"));
+    assert((await page.locator(".syic-summary").textContent()).includes("updates all references"));
     assert.equal(await page.locator(".sy-imgcompression-root tbody tr").count(), 1);
     await page.evaluate(() => window.__dialogs.at(-1).destroy());
   });
@@ -189,7 +190,7 @@ try {
       const result={labels:labels.map(x=>x.node.textContent),breadcrumb:!!window.__events['open-menu-breadcrumbmore']};labels.forEach(x=>x.node.remove());return result;
     }, { id: activeId, assetPath });
     assert.equal(info.breadcrumb, false); assert.equal(info.labels.filter(label => label.includes("Document attachment total:")).length, 2);
-    assert(info.labels.some(label => label.includes("512 × 384"))); assert(info.labels.includes("Quick compress"));
+    assert(info.labels.some(label => label.includes("PNG · 512 × 384"))); assert(info.labels.includes("Quick compress"));
     assert.equal(referenceRequests.length, before, "menu metadata must not scan workspace references");
     assert.equal(apiRequests.slice(metadataStart).filter(endpoint => endpoint.endsWith("getBlockInfo")).length, 1, "concurrent menus must share document totals");
   });
@@ -252,16 +253,23 @@ try {
       const input = new Uint8Array(source).buffer, lossless = await run(input.slice(0), options);
       const a = await pixels(input), b = await pixels(lossless.bytes);
       const exact = a.length === b.length && a.every((value, index) => value === b[index]);
+      const pngWebp = await run(input.slice(0), { ...options, format: "webp" });
+      const webpPixels = await pixels(pngWebp.bytes);
+      const webpAlpha = a.length === webpPixels.length && a.every((value, index) => index % 4 !== 3 || value === webpPixels[index]);
       const scaled = await run(input.slice(0), { ...options, format: "webp", maxWidth: 128, maxHeight: 128 });
       const c = new OffscreenCanvas(64, 40), ctx = c.getContext("2d"); ctx.fillStyle = "#08f"; ctx.fillRect(0, 0, 64, 40);
       const jpeg = new Uint8Array(await (await c.convertToBlob({ type: "image/jpeg" })).arrayBuffer());
       const exif = new Uint8Array([255,225,0,34,69,120,105,102,0,0,73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
       const oriented = new Uint8Array(jpeg.length + exif.length); oriented.set(jpeg.slice(0,2)); oriented.set(exif,2); oriented.set(jpeg.slice(2),2+exif.length);
-      const result = await run(oriented.buffer, options);
-      return { exact, pngMime: lossless.mime, scaled: [scaled.width, scaled.height], jpeg: [result.width, result.height], jpegMime: result.mime };
+      const result = await run(oriented.buffer.slice(0), options);
+      const jpegWebp = await run(oriented.buffer, { ...options, format: "webp" });
+      return { exact, webpAlpha, pngMime: lossless.mime, scaled: [scaled.width, scaled.height], jpeg: [result.width, result.height], jpegMime: result.mime,
+        jpegWebp: [jpegWebp.width, jpegWebp.height], jpegWebpMime: jpegWebp.mime };
     }, source);
     assert.equal(checks.exact, true); assert.equal(checks.pngMime, "image/png"); assert.deepEqual(checks.scaled, [128, 96]);
+    assert.equal(checks.webpAlpha, true);
     assert.deepEqual(checks.jpeg, [40, 64]); assert.equal(checks.jpegMime, "image/jpeg");
+    assert.deepEqual(checks.jpegWebp, [40, 64]); assert.equal(checks.jpegWebpMime, "image/webp");
   });
   await check("compression overwrites only image bytes without workspace requests and preserves closed notebooks", async () => {
     const before = referenceRequests.length;
@@ -526,6 +534,25 @@ try {
     for (const item of job.items) assert.deepEqual(fs.readFileSync(path.join(workspace, item.oldDiskPath.slice(1))), fs.readFileSync(path.join(workspace, item.backupDiskPath.slice(1))));
     assert.equal((await readJournal()).jobs[0].state, "restored");
   });
+  await check("118 images convert to WebP and restore with four workspace requests per batch", async () => {
+    await page.getByLabel("Output format", { exact: true }).selectOption("webp");
+    await page.locator("thead input[type=checkbox]").check();
+    const start = referenceRequests.length;
+    await page.getByRole("button", { name: "Apply to selected attachments", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent?.startsWith("Completed"), undefined, { timeout: 180000 });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled();
+    const job = (await readJournal()).jobs[0]; assert.equal(job.items.length, 118);
+    assert(job.items.every(item => item.state === "completed" && !item.operation && item.newPath.endsWith(".webp")));
+    assert.equal(referenceRequests.length - start, 4);
+    const restoreStart = referenceRequests.length;
+    const history = page.locator(".syic-history > details").first(); await history.locator("summary").click();
+    await history.getByRole("button", { name: "Restore matching references", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", undefined, { timeout: 120000 });
+    await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled();
+    assert.equal(referenceRequests.length - restoreStart, 4);
+    assert.equal((await readJournal()).jobs[0].state, "restored");
+    await page.getByLabel("Output format", { exact: true }).selectOption("original");
+  });
   await check("native document scans resolve encoded notebook-local assets and retain rename recovery", async () => {
     const name = "本地 %-20261113000500-local01.png", asset = "assets/" + name;
     // Existing attachments may contain characters rejected by current uploads.
@@ -572,6 +599,65 @@ try {
     assert(!referenceRequests.slice(mutationStart).some(url => url.endsWith("relinkAsset")));
     assert.deepEqual(fs.readFileSync(path.join(workspace, "data", asset)), Buffer.from(source));
     assert.deepEqual(fs.readFileSync(path.join(workspace, "data", bookA, asset)), Buffer.from(source));
+  });
+  await check("quick copy modes update only the chosen scope and recover body HTML and title images", async () => {
+    const asset = "assets/scope-20261117000100-scope01.png";
+    await put("/data/" + asset, new Uint8Array(source));
+    activeId = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: "/Scoped quick compression", markdown: `![first](${asset} "Image title")\n\n![again](${asset})\n\n[attachment](${asset}?x=1#frag)\n\n<div class="native-html">\n<img src="${asset}" alt="HTML image" />\n</div>` });
+    const shared = await api("/api/filetree/createDocWithMd", { notebook: bookA, path: "/Scoped shared original", markdown: `![shared](${asset})` });
+    const title = `background-image: url("${asset}");background-position: center;`;
+    await api("/api/attr/setBlockAttrs", { id: activeId, attrs: { "title-img": title } });
+    const sharedBefore = (await api("/api/block/getBlockDOM", { id: shared })).dom;
+    const currentTitle = () => JSON.parse(fs.readFileSync(path.join(workspace, "data", bookA, activeId + ".sy"), "utf8")).Properties["title-img"].replaceAll("&quot;", '"');
+    await page.reload(); await page.evaluate(async () => { await window.__plugin.onload(); window.__open(); });
+    await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Ready");
+    const clickMenu = async label => page.evaluate(({ id, asset, label }) => {
+      const image = document.createElement("img"); image.setAttribute("data-src", asset); const items = [];
+      window.__events["open-menu-image"]({ detail: { menu: { addItem: item => items.push(item) }, element: image, protyle: { block: { rootID: id }, disabled: false } } });
+      items.find(item => item.label === label).click();
+    }, { id: activeId, asset, label });
+    for (const [mode, format] of [["document", "webp"], ["document", "original"], ["workspace", "original"]]) {
+      await clickMenu("Quick compression settings");
+      const child = page.locator(".syic-child");
+      await child.getByLabel("Processing mode", { exact: true }).selectOption(mode);
+      await child.getByLabel("Output format", { exact: true }).selectOption(format);
+      await child.getByLabel("Resize mode", { exact: true }).selectOption("50");
+      await page.screenshot({ path: path.join(testRoot, `quick-${mode}-${format}.png`), fullPage: true });
+      await child.getByRole("button", { name: "Save settings", exact: true }).click(); await expect(child).toHaveCount(0);
+      const previous = fs.existsSync(path.join(workspace, "data/storage/petal/sy-imgcompression/jobs.json")) ? (await readJournal()).jobs[0]?.id : "", start = referenceRequests.length;
+      await clickMenu("Quick compress");
+      await expect.poll(async () => {
+        if (!fs.existsSync(path.join(workspace, "data/storage/petal/sy-imgcompression/jobs.json"))) return false;
+        const job = (await readJournal()).jobs[0];
+        if (job.id !== previous && job.state === "interrupted") throw new Error(JSON.stringify(job.items));
+        return job.id !== previous && job.state === "completed";
+      }, { timeout: 60000 }).toBe(true);
+      await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled();
+      const job = (await readJournal()).jobs[0], item = job.items[0]; assert.equal(item.state, "completed");
+      assert.equal(item.operation, mode === "document" ? "document-references" : undefined);
+      assert.notEqual(item.oldPath, item.newPath); assert(item.newPath.endsWith(format === "webp" ? ".webp" : ".png"));
+      assert.deepEqual(fs.readFileSync(path.join(workspace, "data", asset)), Buffer.from(source));
+      const currentDOM = (await api("/api/block/getBlockDOM", { id: activeId })).dom;
+      fs.writeFileSync(path.join(testRoot, `scope-${mode}-${format}.html`), currentDOM);
+      assert(currentDOM.includes(item.newPath)); assert(!currentDOM.includes(asset));
+      assert(currentTitle().includes(item.newPath));
+      const sharedDOM = (await api("/api/block/getBlockDOM", { id: shared })).dom;
+      if (mode === "document") { assert.equal(sharedDOM, sharedBefore); assert.equal(referenceRequests.length - start, 0); }
+      else { assert(sharedDOM.includes(item.newPath)); assert.equal(referenceRequests.length - start, 4); }
+      if (format === "webp") {
+        const data = fs.readFileSync(path.join(workspace, item.newDiskPath.slice(1))); assert.equal(data.toString("ascii", 8, 12), "WEBP");
+      }
+      const restoreStart = referenceRequests.length;
+      const history = page.locator(".syic-history > details").first(); await history.locator("summary").click();
+      await history.getByRole("button", { name: mode === "document" ? "Restore images and references" : "Restore matching references", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".syic-status")?.textContent === "Restored", undefined, { timeout: 60000 });
+      await expect(page.getByRole("button", { name: "Scan current document", exact: true })).toBeEnabled();
+      assert.equal((await readJournal()).jobs[0].state, "restored");
+      if (mode === "document") assert.equal(referenceRequests.length - restoreStart, 0);
+      assert((await api("/api/block/getBlockDOM", { id: activeId })).dom.includes(asset));
+      assert.equal(currentTitle(), title);
+      assert((await api("/api/block/getBlockDOM", { id: shared })).dom.includes(asset));
+    }
   });
   await check("history deletion removes only plugin backups and accepts missing backups without workspace scans", async () => {
     messages = JSON.parse(fs.readFileSync(path.join(root, "src/i18n/en_US.json"), "utf8"));

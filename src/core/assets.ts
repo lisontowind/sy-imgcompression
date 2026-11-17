@@ -22,7 +22,7 @@ export function orderedPaths(dom: string, titleImage: string, all: string[]): st
   return ordered;
 }
 
-export async function documentInventory(kernel: Kernel, id: string, signal?: AbortSignal) {
+export async function documentInventory(kernel: Kernel, id: string, signal?: AbortSignal, includeDatabases = true) {
   checkCancelled(signal);
   if (!nodeId.test(id)) throw new UserError("openDocument");
   const [{ notebooks }, info] = await Promise.all([
@@ -33,8 +33,8 @@ export async function documentInventory(kernel: Kernel, id: string, signal?: Abo
   if (!nodeId.test(info?.box) || !info.path?.startsWith("/") || info.path.split("/").includes("..")) throw new UserError("readFailed", id);
   const source = documentSourceInventory(await readJSON<SourceNode>(kernel, `/data/${info.box}${info.path}`, signal), id);
   // Rendering can materialize database metadata; read its source afterward.
-  const dbPaths = await databaseViewPaths(kernel, source.databaseDOM, signal);
-  const supplemental = await databaseSourcePaths(kernel, source.databaseIds, signal);
+  const dbPaths = includeDatabases ? await databaseViewPaths(kernel, source.databaseDOM, signal) : [];
+  const supplemental = includeDatabases ? await databaseSourcePaths(kernel, source.databaseIds, signal) : [];
   const paths = [...new Set([...source.paths, ...dbPaths, ...supplemental])];
   return { id, title: source.title, notebooks, paths };
 }
@@ -64,12 +64,12 @@ export async function documentStats(kernel: Kernel, id: string, signal?: AbortSi
   return reads.run(id, async current => (await attachmentStats(kernel, (await documentInventory(kernel, id, current)).paths, current)).stats, signal);
 }
 
-export async function scanDocument(kernel: Kernel, id: string, onlyPath?: string, progress?: (path: string) => void, signal?: AbortSignal, wholeDocumentStats = true): Promise<DocumentAssets> {
-  const { title, notebooks, paths } = await documentInventory(kernel, id, signal);
+export async function scanDocument(kernel: Kernel, id: string, onlyPath?: string, progress?: (path: string) => void, signal?: AbortSignal, wholeDocumentStats = true, includeDatabases = true): Promise<DocumentAssets> {
+  const { title, notebooks, paths } = await documentInventory(kernel, id, signal, includeDatabases);
   const selectedPath = onlyPath ? normalizeAssetURL(onlyPath) : undefined;
   if (onlyPath && !selectedPath) throw new UserError("invalidAssetPath", onlyPath);
   const chosen = selectedPath ? paths.filter(p => p === selectedPath) : paths;
-  if (onlyPath && !chosen.length) throw new UserError("sourceChanged");
+  if (onlyPath && !chosen.length) throw new UserError(includeDatabases ? "sourceChanged" : "noDocumentReferences");
   const { stats, sizes, deferred } = await attachmentStats(kernel, wholeDocumentStats ? paths : chosen, signal, progress);
   if (!chosen.length) return { id, title, notebooks, assets: [], stats };
   // Browsing only needs the kernel's resolved path for this document's files.

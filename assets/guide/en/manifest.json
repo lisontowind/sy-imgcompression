@@ -1,7 +1,7 @@
 {
   "source": "Production plugin + isolated SiYuan kernel + browser host adapter; annotations added in the capture page.",
   "language": "en_US",
-  "documentId": "20261114131010-n42jwnb",
+  "documentId": "20261117194941-5ruu8ix",
   "images": [
     {
       "file": "01-batch-compression.png",
@@ -29,7 +29,7 @@
       "notes": [
         [
           "Adjust this image",
-          "Keep the original format and set quality, scale or a pixel limit. PNG uses lossless optimisation. This example scales the cover to 50%."
+          "Choose original format or WebP, quality, scale or a pixel limit. Original PNG is lossless. This example scales the cover to 50%."
         ],
         [
           "Save an override",
@@ -57,7 +57,7 @@
         ],
         [
           "Apply from the main panel",
-          "Previewing never writes images. Apply from the main panel to back up and overwrite each image in place, without scanning or rewriting references."
+          "Apply from the main panel when ready. This original-format example backs up and overwrites in place; WebP conversion saves a copy and updates all references."
         ]
       ],
       "width": 1600,
@@ -88,16 +88,16 @@
       "title": "Save settings for quick compression",
       "notes": [
         [
-          "Open settings directly",
-          "Open Quick compression settings from an image context menu or the main panel. No attachment scan is needed."
+          "Choose a processing mode",
+          "Overwrite in place, save for this document, or update all references. Overwriting keeps the original format."
         ],
         [
-          "Save your preferences",
-          "Quick settings are saved independently of the batch panel. This example uses Balanced, original format and 75% scale."
+          "Choose format and scale",
+          "This example saves WebP at 75% for this document only. Originals and other documents stay unchanged; shared database fields and external embeds are skipped."
         ],
         [
-          "Choose a useful size",
-          "Scaling preserves the aspect ratio. Once saved, Quick compress runs directly and records the job in task history."
+          "Save, then right-click",
+          "Quick settings are independent of the main panel. Quick compress runs directly and records the job and recovery information."
         ]
       ],
       "width": 1600,

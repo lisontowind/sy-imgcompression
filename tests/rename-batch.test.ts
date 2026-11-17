@@ -4,7 +4,7 @@ import { Compressor, DEFAULT_COMPRESSION, DEFAULT_RENAME, JobManager } from "../
 import { expectedAfter } from "../src/core/references";
 import { requestPath } from "../src/core/paths";
 import { AssetIdentity, AssetReference, CompressionResult, DocumentAssets, Journal, Kernel, UserError } from "../src/types";
-import { png, ref, report } from "./fixtures";
+import { png, webp, ref, report } from "./fixtures";
 
 class BatchKernel implements Kernel {
   files = new Map<string, ArrayBuffer>();
@@ -64,6 +64,72 @@ function setup(count = 2, compressor?: Compressor) {
   const manager = new JobManager(kernel, { load: async () => saved, save: async journal => { saved = structuredClone(journal); snapshots.push(saved); } }, compressor);
   return { kernel, manager, document, snapshots, saved: () => saved };
 }
+
+describe("compression copies and mixed tasks", () => {
+  const output = (): CompressionResult => ({ bytes: webp(), mime: "image/webp", extension: ".webp", width: 16, height: 12, originalWidth: 16, originalHeight: 12 });
+  it("converts 118 PNG images and restores all references with four requests per batch", async () => {
+    const compressor = { compress: vi.fn(async () => output()), cancel: vi.fn() };
+    const { kernel, manager, document } = setup(118, compressor);
+    const job = await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" });
+    expect(job.items.every(item => !item.operation && item.state === "completed" && item.newPath.endsWith(".webp"))).toBe(true);
+    expect(compressor.compress).toHaveBeenCalledTimes(118);
+    expect(kernel.requests.filter(request => /findAssetReferences|relinkAsset/.test(request.endpoint))).toHaveLength(4);
+    for (const item of job.items) { expect(await kernel.readFile(item.oldDiskPath)).toEqual(png()); expect(kernel.refs.get(item.newPath)).toHaveLength(2); }
+    const start = kernel.requests.length; await manager.restore(job);
+    expect(kernel.requests.slice(start).filter(request => /findAssetReferences|relinkAsset/.test(request.endpoint))).toHaveLength(4);
+    for (const item of job.items) expect(kernel.refs.get(item.oldPath)).toHaveLength(2);
+  });
+  it("reuses encoded bytes on old-kernel fallback", async () => {
+    const compressor = { compress: vi.fn(async () => output()), cancel: vi.fn() };
+    const { kernel, manager, document } = setup(2, compressor); kernel.unsupported = true;
+    const job = await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" });
+    expect(job.items.every(item => item.state === "completed")).toBe(true); expect(compressor.compress).toHaveBeenCalledTimes(2);
+    expect(kernel.requests.filter(request => request.body.mappings)).toHaveLength(0);
+    await manager.restore(job); expect(job.state).toBe("restored");
+  });
+  it("mixes original-format overwrites with WebP copies and recovers both", async () => {
+    const compressor = { compress: vi.fn(async (_bytes: ArrayBuffer, options: any) => options.format === "webp" ? output()
+      : { ...output(), bytes: png(), mime: "image/png", extension: ".png" }), cancel: vi.fn() };
+    const { kernel, manager, document } = setup(2, compressor);
+    const source = new Uint8Array(200); source.set(new Uint8Array(png()));
+    for (const asset of document.assets) { asset.size = 200; kernel.files.set(asset.diskPath, source.buffer.slice(0)); }
+    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION, new Map([[document.assets[1].path, { ...DEFAULT_COMPRESSION, format: "webp" }]]));
+    expect(job.items.map(item => item.operation)).toEqual(["replace-file", undefined]);
+    expect(kernel.requests.find(request => request.body.paths)?.body.paths).toEqual([requestPath(document.assets[1].path)]);
+    await manager.restore(job); expect(job.items.every(item => item.state === "restored")).toBe(true);
+    for (const item of job.items) expect(await kernel.readFile(item.oldDiskPath)).toEqual(source.buffer);
+  });
+  it("keeps WebP inputs in place unless a save-a-copy mode is explicitly selected", async () => {
+    for (const mode of [undefined, "workspace"] as const) {
+      const { kernel, manager, document } = setup(1, { compress: async () => output(), cancel: () => {} });
+      const asset = document.assets[0], source = new Uint8Array(200); source.set(new Uint8Array(webp()));
+      const old = asset.path; asset.path = "assets/original.webp"; asset.diskPath = "/data/" + asset.path; asset.extension = ".webp"; asset.size = 200;
+      kernel.files.set(asset.diskPath, source.buffer); kernel.refs.set(asset.path, kernel.refs.get(old)!);
+      const job = await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" }, undefined, mode);
+      expect(job.items[0].operation).toBe(mode ? undefined : "replace-file");
+      expect(job.items[0].newPath === asset.path).toBe(!mode);
+    }
+  });
+  it("skips no-savings conversions before any reference requests", async () => {
+    const { kernel, manager, document } = setup(2, { compress: async () => ({ ...output(), bytes: new ArrayBuffer(200) }), cancel: () => {} });
+    const job = await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" });
+    expect(job.items.every(item => item.error === "noSavings")).toBe(true); expect(kernel.requests).toHaveLength(0); expect(kernel.writeCount).toBe(0);
+  });
+  it("blocks copies on incomplete scans and recovers unknown partial conversion results", async () => {
+    for (const incomplete of [true, false]) {
+      const { kernel, manager, document } = setup(2, { compress: async () => output(), cancel: () => {} });
+      kernel.incomplete = incomplete; kernel.partialFailure = !incomplete;
+      await expect(manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" })).rejects.toThrow(incomplete ? "incompleteScan" : "connection lost");
+      if (incomplete) expect(kernel.writeCount).toBe(0);
+      else expect(manager.journal.jobs[0].items.every(item => item.state === "restored")).toBe(true);
+    }
+  });
+  it("splits 129 conversions into bounded groups", async () => {
+    const { kernel, manager, document } = setup(129, { compress: async () => output(), cancel: () => {} });
+    await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" });
+    expect(kernel.requests.filter(request => request.body.mappings && request.body.dryRun).map(request => request.body.mappings.length)).toEqual([128, 1]);
+  });
+});
 
 describe("batch image renaming", () => {
   it("renames 118 images with four workspace requests and durable phase checkpoints", async () => {

@@ -11,7 +11,7 @@ export function optionsText(options: CompressionOptions, t: Translator): string 
 }
 
 /** The explicit preset survives even when custom quality equals a named preset. */
-export function profileEditor(root: HTMLElement, profile: CompressionProfile, t: Translator, changed: () => void, pngOnly = false): void {
+export function profileEditor(root: HTMLElement, profile: CompressionProfile, t: Translator, changed: () => void, pngOnly = false, inPlaceOnly = false, showModeHint = true): void {
   const resize = profile.options.resize;
   let sizeChoice = !resize ? "legacy" : resize.mode === "percent" ? ([75, 50, 25].includes(resize.value) ? String(resize.value) : "custom") : resize.mode;
   const field = (key: string, input: HTMLElement) => {
@@ -34,8 +34,8 @@ export function profileEditor(root: HTMLElement, profile: CompressionProfile, t:
     field("preset", select([["90", t("clear")], ["82", t("balanced")], ["70", t("small")], ["custom", t("custom")]], profile.preset, value => {
       profile.preset = value as CompressionProfile["preset"]; if (value !== "custom") profile.options.quality = Number(value);
     }));
-    const format = select([["original", t("originalFormat")]], "original", () => {});
-    format.disabled = true; format.dataset.locked = "true"; field("format", format);
+    const format = select([["original", t("originalFormat")], ["webp", "WebP"]], profile.options.format, value => { profile.options.format = value as CompressionOptions["format"]; });
+    format.options[1].disabled = inPlaceOnly; field("format", format);
     const quality = number(profile.options.quality, 100, value => { profile.options.quality = value; profile.preset = "custom"; });
     if (pngOnly && profile.options.format === "original") { quality.disabled = true; quality.dataset.locked = "true"; }
     field("quality", quality);
@@ -52,8 +52,8 @@ export function profileEditor(root: HTMLElement, profile: CompressionProfile, t:
       field(sizeChoice === "custom" ? "percentValue" : "pixelValue", number(size.value, sizeChoice === "custom" ? 100 : 100000, value => { size.value = value; }));
     }
     root.append(element("p", "syic-note", t("aspectHint")));
-    root.append(element("p", "syic-note", t("inPlaceHint")));
+    if (showModeHint) root.append(element("p", "syic-note", t(inPlaceOnly ? "inPlaceOnlyHint" : "compressionModesHint")));
     if (profile.options.format === "original") root.append(element("p", "syic-note", t("pngQualityHint")));
   };
-  profile.options = { ...cloneOptions(profile.options), format: "original" }; render();
+  profile.options = cloneOptions(profile.options); render();
 }

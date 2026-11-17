@@ -89,7 +89,7 @@ it("loads reference details on demand and reuses them only within the current sc
   vi.mocked(scanDocument).mockResolvedValue(deferred);
   const { root, kernel } = await setup();
   expect(kernel.post).not.toHaveBeenCalled();
-  expect(root.querySelector(".syic-impact")!.textContent).toContain("no workspace reference scan");
+  expect(root.querySelector(".syic-impact")!.textContent).toContain("without a workspace scan");
   vi.mocked(kernel.post).mockResolvedValue(report([ref()]));
   await click("Reference details", root);
   await vi.waitFor(() => expect(document.querySelectorAll(".syic-ref")).toHaveLength(1));

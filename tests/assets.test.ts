@@ -27,6 +27,19 @@ function mockWorkspace(encrypted = false) {
     ID: doc, Type: "NodeDocument", Properties: { title: "Fixture" }, Children: [{ Type: "NodeLinkDest", Data: "assets/a.png" }],
   } : { encrypted })).buffer, putFile: vi.fn() } as unknown as Kernel;
 }
+it("current-document quick scans skip database reads and reject database-only images", async () => {
+  const kernel = mockWorkspace();
+  kernel.readFile = async path => {
+    if (!path.endsWith(".sy")) throw new Error("shared database must not be read");
+    return new TextEncoder().encode(JSON.stringify({ ID: doc, Type: "NodeDocument", Children: [
+      { Type: "NodeLinkDest", Data: "assets/a.png" },
+      { Type: "NodeAttributeView", AttributeViewID: "20261117000100-dbase01" },
+    ] })).buffer;
+  };
+  expect((await scanDocument(kernel, doc, "assets/a.png", undefined, undefined, false, false)).assets).toHaveLength(1);
+  await expect(scanDocument(kernel, doc, "assets/database.png", undefined, undefined, false, false)).rejects.toThrow("noDocumentReferences");
+  expect(vi.mocked(kernel.post).mock.calls.some(([endpoint]) => /AttributeView|findAssetReferences|relinkAsset/.test(endpoint))).toBe(false);
+});
 it("resolves document attachments without walking closed notebooks or workspace directories", async () => {
   const kernel = mockWorkspace(); const result = await scanDocument(kernel, doc);
   expect(result.assets).toHaveLength(1); expect(result.assets[0]).toMatchObject({ diskPath: "/data/assets/a.png", selected: true, referencesLoaded: false });

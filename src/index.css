@@ -57,7 +57,7 @@
 .syic-doc-title { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
 .syic-total { font-weight: 600; color: var(--syic-accent); padding: 5px 10px; border-radius: 6px; background: color-mix(in srgb, var(--b3-theme-primary) 7%, transparent); }
 .syic-selected { font-size: 12px; color: var(--syic-muted); }
-.syic-impact { font-size: 12px; color: var(--syic-muted); text-align: right; }
+.syic-impact { grid-column: 1 / -1; min-width: 0; font-size: 12px; color: var(--syic-muted); text-align: left; }
 .syic-list { overflow: auto; max-height: 44vh; border: 1px solid var(--syic-border); border-radius: 8px; scrollbar-width: thin; }
 .syic-list > .syic-note { padding: 16px; text-align: center; }
 .syic-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 900px; font-size: 12px; }

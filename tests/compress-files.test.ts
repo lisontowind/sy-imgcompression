@@ -27,15 +27,15 @@ function setup(count = 1) {
 }
 
 describe("image compression without workspace scans", () => {
-  it("uses original format for previews even when passed an older WebP preference", async () => {
+  it("honours the selected preview format without workspace requests", async () => {
     const { manager, document, compressor, files, post } = setup();
     await manager.preview(document.assets[0], { ...DEFAULT_COMPRESSION, format: "webp" });
-    expect(compressor.compress.mock.calls[0]?.[1]).toMatchObject({ format: "original" });
+    expect(compressor.compress.mock.calls[0]?.[1]).toMatchObject({ format: "webp" });
     expect(files.size).toBe(1); expect(post).not.toHaveBeenCalled();
   });
   it.each([1, 118])("compresses and restores %i images at their original paths without reference APIs", async count => {
     const { manager, document, files, post, compressor, snapshots } = setup(count);
-    const job = await manager.run(document, "compress", { ...DEFAULT_COMPRESSION, format: "webp" });
+    const job = await manager.run(document, "compress", DEFAULT_COMPRESSION);
     expect(job.state).toBe("completed"); expect(compressor.compress).toHaveBeenCalledTimes(count);
     expect(job.items.every(item => item.state === "completed" && item.oldPath === item.newPath && item.oldDiskPath === item.newDiskPath)).toBe(true);
     expect(job.items.every(item => item.compressionOptions?.format === "original")).toBe(true);
