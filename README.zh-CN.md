@@ -1,6 +1,6 @@
 # 思源图片压缩
 
-![思源图片压缩插件题头图](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/marketing/header.png)
+![思源图片压缩插件题头图](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/marketing/header.png)
 
 图片压缩为主功能，图片批量重命名为独立辅助功能。面向桌面版思源 3.8.5 及以上；
 压缩通过原生文件接口备份并写回原图片，不需要全库引用扫描。
@@ -85,37 +85,37 @@ JPEG/WebP 预设质量为
 
 扫描当前文档，选择预设和尺寸，核对附件总大小，再应用到勾选图片。
 
-![批量压缩操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/01-batch-compression.png)
+![批量压缩操作说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/01-batch-compression.png)
 
 ### 2. 逐图配置
 
 每张图片可以独立设置输出格式、质量和缩放，保存后不受全局参数修改影响。
 
-![逐图配置操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/02-individual-settings.png)
+![逐图配置操作说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/02-individual-settings.png)
 
 ### 3. 点击生成压缩预览
 
 先对比尺寸、体积和画面，再返回主面板应用。查看原图本身不会触发压缩。
 
-![压缩预览操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/03-compression-preview.png)
+![压缩预览操作说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/03-compression-preview.png)
 
 ### 4. 自定义图片名称
 
 统一设置前缀，或逐张单独命名；思源 ID 与原扩展名自动保留。
 
-![自定义命名操作说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/04-custom-names.png)
+![自定义命名操作说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/04-custom-names.png)
 
 ### 5. 右键快捷压缩
 
 在独立选项框保存常用配置，之后从图片右键直接执行快捷压缩。
 
-![右键快捷压缩配置说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/05-quick-compression.png)
+![右键快捷压缩配置说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/05-quick-compression.png)
 
 ### 6. 任务记录与恢复
 
 压缩前的原图备份用于恢复，文件缩减量不等于磁盘空间立即释放。恢复前会核验当前图片及备份。
 
-![任务记录与恢复说明](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/06-history-recovery.png)
+![任务记录与恢复说明](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/06-history-recovery.png)
 
 ## 共享引用与恢复
 

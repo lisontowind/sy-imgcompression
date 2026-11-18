@@ -1,6 +1,6 @@
 # Image Compression for SiYuan
 
-![Image Compression for SiYuan](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/marketing/header-en.png)
+![Image Compression for SiYuan](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/marketing/header-en.png)
 
 Offline image compression comes first. An independent image-renaming tab simplifies
 image filenames while preserving terminal SiYuan IDs. Desktop SiYuan 3.8.5 or newer is required;
@@ -117,27 +117,27 @@ modes, image restoration and backup-history cleanup.
 
 1. Choose batch settings and review attachment totals before applying.
 
-![Batch compression](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/01-batch-compression.png)
+![Batch compression](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/01-batch-compression.png)
 
 2. Set independent parameters for individual images.
 
-![Individual image settings](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/02-individual-settings.png)
+![Individual image settings](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/02-individual-settings.png)
 
 3. Generate a preview explicitly, compare the results, then apply from the main panel.
 
-![Compression preview](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/03-compression-preview.png)
+![Compression preview](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/03-compression-preview.png)
 
 4. Use a batch prefix or individual names while retaining SiYuan IDs and extensions.
 
-![Custom image names](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/04-custom-names.png)
+![Custom image names](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/04-custom-names.png)
 
 5. Save independent quick settings and compress directly from the image context menu.
 
-![Quick compression settings](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/05-quick-compression.png)
+![Quick compression settings](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/05-quick-compression.png)
 
 6. Review job results and restore original image bytes from verified backups.
 
-![History and recovery](https://raw.githubusercontent.com/lisontowind/sy-imgcompression/main/assets/guide/en/06-history-recovery.png)
+![History and recovery](https://cdn.jsdelivr.net/gh/lisontowind/sy-imgcompression@main/assets/guide/en/06-history-recovery.png)
 
 ## Shared attachments and recovery
 
